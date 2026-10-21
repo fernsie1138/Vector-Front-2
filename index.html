@@ -824,7 +824,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 169;
+const GAME_VERSION = 170;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -6989,6 +6989,12 @@ function purchaseUnit(team, unitType) {
   // construction too, not just Turret specifically.
   if (cost === undefined) return false;
   if (supply[team] < cost) return false;
+  // Hard cap of 100 units per team, regardless of available supply - counts
+  // every live unit AND structure for that team (getTanks is kind==='tank',
+  // which covers both; this is the exact same count the "X units" HUD
+  // display is built from), matching both the player's own buy buttons and
+  // every red AI purchase, since both call through this one function.
+  if (getTanks(team).length >= 100) return false;
   const base = team==='blue' ? blueBase : redBase;
   if (!base.alive) return false; // no base, nowhere to produce from
   supply[team] -= cost;
@@ -7626,11 +7632,16 @@ document.getElementById('btnDefend').addEventListener('click', ()=>{
     // deployed) can never spawn a second passenger.
     if (t.unitType === 'apc' && !t.hasDeployedPassenger) {
       t.hasDeployedPassenger = true;
-      const ang = Math.random()*Math.PI*2;
-      const dist = t.radius + 22;
-      const px = t.x + Math.cos(ang)*dist, py = t.y + Math.sin(ang)*dist;
-      const passenger = makeTank(t.team, px, py, 'infantry');
-      entities.push(passenger);
+      // Same 100-unit team cap purchaseUnit enforces - the APC itself still
+      // deploys either way, but a team already at the cap doesn't get a
+      // free passenger unit on top of it.
+      if (getTanks(t.team).length < 100) {
+        const ang = Math.random()*Math.PI*2;
+        const dist = t.radius + 22;
+        const px = t.x + Math.cos(ang)*dist, py = t.y + Math.sin(ang)*dist;
+        const passenger = makeTank(t.team, px, py, 'infantry');
+        entities.push(passenger);
+      }
     }
   });
 });
@@ -9454,7 +9465,14 @@ function updateTank(t, dt, now) {
       // with nothing to show for the time spent - supply already spent at
       // confirm time (Turret/Watch Tower/Heavy Artillery) is not refunded,
       // same as any other wasted action.
-      if (!unitEnabled[t.team] || unitEnabled[t.team][buildingType] !== false) {
+      // Same 100-unit team cap purchaseUnit enforces, applied here too -
+      // field-built structures (Foxhole/Barricade/Turret/Watch Tower/Heavy
+      // Artillery/Embankment) never go through purchaseUnit at all, so
+      // without this check a team already at the cap could still exceed it
+      // by building structures in the field. Same "no refund" treatment as
+      // the unit-options gate just above: time and supply already spent,
+      // builder freed up with nothing to show for it.
+      if ((!unitEnabled[t.team] || unitEnabled[t.team][buildingType] !== false) && getTanks(t.team).length < 100) {
         const structure = makeTank(t.team, t.x, t.y, buildingType);
         entities.push(structure);
       }
