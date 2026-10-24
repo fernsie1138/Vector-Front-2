@@ -182,6 +182,15 @@
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 10px;
   }
+  /* Solid color sampled directly from title_artwork.jpg's own background
+     border (averaged across a narrow strip on all four edges, well outside
+     the cartridge artwork itself: #bdb4a8) - a flat match rather than the
+     options screen's gradient, so the image's edges blend seamlessly into
+     the page on any viewport the artwork doesn't exactly fill, instead of
+     visibly transitioning into an unrelated color. Scoped to launchScreen
+     only; optionsScreen has no artwork to blend with and keeps its own
+     gradient unchanged. */
+  #launchScreen { background: #bdb4a8; }
   #optionsScreen { display: none; }
 
   /* The supplied title artwork is displayed pixel-for-pixel as an image.
@@ -824,7 +833,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 171;
+const GAME_VERSION = 172;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
