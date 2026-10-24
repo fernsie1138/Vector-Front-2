@@ -824,7 +824,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 170;
+const GAME_VERSION = 171;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -2673,7 +2673,11 @@ const UNIT_STATS = {
   // longer in UNIT_COSTS for that to point to).
   turret: {
     cost: 60, hp: 200, armor: 14, damage: 20, fireCooldown: 0.5,
-    range: 300, sight: 240, react: 0, speed: 47.5, shellSpeed: 1500,
+    // range raised 300->400; sight raised to match (was 240) - a weapon
+    // range beyond the unit's own sight would otherwise be a dead zone it
+    // could physically reach but could never actually detect anything in,
+    // since turret has no react radius (0) to fall back on either.
+    range: 400, sight: 400, react: 0, speed: 47.5, shellSpeed: 1500,
     blastRadius: 0, setupTime: 10, canFireWhileMoving: false, collisionRadius: 15
   },
   // Infantry's armor is conditional: 5 normally, 13 while in defend mode. This
@@ -2722,7 +2726,10 @@ const UNIT_STATS = {
   // rather than a real offensive weapon.
   blockhouse: {
     cost: 150, hp: 500, armor: 15, damage: 17, fireCooldown: 1,
-    range: 200, sight: 240, react: 0, speed: 10, shellSpeed: 1200,
+    // range raised 200->400; sight raised to match (was 240) - same reasoning
+    // as Turret's own range/sight change above, so the extra range is
+    // actually usable rather than a dead zone beyond what it can detect.
+    range: 400, sight: 400, react: 0, speed: 10, shellSpeed: 1200,
     blastRadius: 0, setupTime: 20, canFireWhileMoving: false, collisionRadius: 20
   },
   // Foxhole: not purchased directly through the buy row - built by an
@@ -2977,7 +2984,7 @@ const FLYING_UNIT_TYPES = new Set(['hkunit']);
 // attackTarget, through any path (direct sighting, shared-awareness
 // reacting, the player's manual click-to-attack, or the ATTACK button's
 // "nearest enemy" auto-pick) - see canTargetFlying and its call sites.
-const CAN_TARGET_FLYING_UNIT_TYPES = new Set(['scout', 'autotank', 'infantry', 'apc', 'turret', 'blockhouse', 'mech']);
+const CAN_TARGET_FLYING_UNIT_TYPES = new Set(['scout', 'autotank', 'infantry', 'apc', 'turret', 'blockhouse', 'mech', 'technicalmg']);
 function canTargetFlying(attackerUnitType, target) {
   return !FLYING_UNIT_TYPES.has(target.unitType) || CAN_TARGET_FLYING_UNIT_TYPES.has(attackerUnitType);
 }
@@ -9924,6 +9931,41 @@ function updateMuzzleFlashes() {
   muzzleFlashes = muzzleFlashes.filter(fl => now - fl.born < fl.duration);
 }
 
+// "Embankments, barricades and foxholes block splash damage to units."
+// Separate from resolveEmbankmentRedirect above (which only redirects a
+// single AIMED shot's direct hit, and only for Embankment specifically) -
+// this instead screens a unit from an explosion's AREA damage if one of
+// these three structures sits on the line between the blast and that unit,
+// regardless of which team the structure itself belongs to: splash damage
+// already only ever hits the opposing team to begin with (see resolveHit
+// below), so there's no separate "friendly fire passes through" case to
+// handle here the way the direct-fire redirect needs - a physical barrier
+// blocks an explosion's blast/shrapnel the same way for anyone standing
+// behind it. excludeId lets the struck structure itself (if it's one of
+// these three types and happens to be within the blast radius) still take
+// its own splash damage normally, rather than finding itself sitting
+// "between the blast and itself" and blocking its own hit.
+const SPLASH_BLOCKING_TYPES = new Set(['embankment', 'barricade', 'foxhole']);
+function isSplashBlocked(x0, y0, x1, y1, excludeId) {
+  const dx = x1-x0, dy = y1-y0;
+  const lenSq = dx*dx + dy*dy;
+  // A unit standing right at (or essentially at) the impact point is the
+  // blast center itself - there's no "in between" for anything to occupy,
+  // so it's never blocked. Without this, the zero-length segment below
+  // degenerates to "is a structure merely near the impact point at all",
+  // which could wrongly shield the actual direct-hit target just because
+  // some unrelated structure happens to be nearby.
+  if (lenSq < 1) return false;
+  for (const e of entities) {
+    if (e.kind !== 'tank' || !e.alive || !SPLASH_BLOCKING_TYPES.has(e.unitType)) continue;
+    if (e.id === excludeId) continue;
+    let t = lenSq > 0 ? ((e.x-x0)*dx + (e.y-y0)*dy) / lenSq : 0;
+    t = Math.max(0, Math.min(1, t));
+    const px = x0 + t*dx, py = y0 + t*dy;
+    if (Math.hypot(e.x-px, e.y-py) <= e.radius) return true;
+  }
+  return false;
+}
 function resolveHit(p) {
   // Splash damage: artillery rounds damage every enemy unit within blast radius
   // of the actual impact point, not just the locked-on target. The impact point
@@ -9938,7 +9980,14 @@ function resolveHit(p) {
       if (!e.alive || e.team!==oppTeam) return;
       if (e.kind!=='tank' && e.kind!=='base') return; // supply depots are indestructible - splash never touches them
       const d = Math.hypot(e.x-impactX, e.y-impactY);
-      if (d <= p.blastRadius) damageEntity(e, p.dmg);
+      if (d <= p.blastRadius) {
+        // "Embankments, barricades and foxholes block splash damage to
+        // units" - screened from this hit if one sits between the blast
+        // and this unit (see isSplashBlocked above for why team doesn't
+        // matter here).
+        if (isSplashBlocked(impactX, impactY, e.x, e.y, e.id)) return;
+        damageEntity(e, p.dmg);
+      }
     });
     spawnExplosion(impactX, impactY, p.blastRadius, p.dmg);
     return;
