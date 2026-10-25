@@ -840,7 +840,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 175;
+const GAME_VERSION = 176;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -6650,6 +6650,64 @@ function initCustomMapCompositing(mapId) {
 // destroyed (see damageCustomMapCellsNear), so a spot that has genuinely
 // opened up for movement always reads as visibly destroyed too, not just
 // partially scarred.
+// Time-based crater fade: "craters would fade over time, revealing the
+// damaged map" - the per-hit reveal above only grows with MORE hits at a
+// spot, never just from time passing on its own, which is the actual gap
+// this fills. Each distinct crater location gets tracked here and, once
+// 5 minutes old, has fully faded through to the damaged artwork
+// regardless of whether it's ever hit again - periodically topped up
+// toward that target via the exact same revealCustomMapDamageNear stamp
+// mechanism above, just driven by elapsed time instead of damage amount.
+const CUSTOM_MAP_CRATER_FADE_MS = 5 * 60 * 1000;
+let customMapRevealEvents = []; // {x, y, radius, bornTime, startIntensity, lastAppliedIntensity}
+let lastCustomMapFadeCheck = 0;
+const CUSTOM_MAP_FADE_CHECK_INTERVAL_MS = 2000; // no need to re-check every frame for a 5-minute fade
+
+// Called alongside every revealCustomMapDamageNear stamp from a weapon hit
+// (not from the guaranteed-full-reveal call on cell destruction, which is
+// already at intensity 1 with nothing left to fade toward) - merges with
+// an existing nearby tracked crater rather than creating a new one per
+// hit, same dedup philosophy as the existing craters[] array, and
+// deliberately keeps that existing crater's ORIGINAL bornTime rather than
+// resetting it: a spot that's been cratered for a while keeps fading on
+// its original schedule even if something lands nearby again later.
+function trackCustomMapRevealEvent(x, y, radius, initialIntensity, nowMs) {
+  if (!activeCustomMapId) return;
+  const merged = customMapRevealEvents.find(ev => Math.hypot(ev.x-x, ev.y-y) <= Math.max(ev.radius, radius)*0.6);
+  if (merged) {
+    merged.radius = Math.max(merged.radius, radius);
+  } else {
+    customMapRevealEvents.push({ x, y, radius, bornTime: nowMs, startIntensity: initialIntensity, lastAppliedIntensity: initialIntensity });
+  }
+}
+
+// Called once per frame from gameLoop (self-throttles to once every
+// CUSTOM_MAP_FADE_CHECK_INTERVAL_MS internally, so the per-frame call
+// itself is cheap). For each tracked crater, computes what fraction of
+// the way to full reveal its age alone should have carried it, and tops
+// it up by the difference since the last check - fully resolved craters
+// are dropped from the list once their age passes the 5-minute mark, so
+// this list only ever holds genuinely still-fading craters, not every one
+// that's ever happened.
+function updateCustomMapCraterFade(nowMs) {
+  if (!activeCustomMapId || !customMapRevealEvents.length) return;
+  if (nowMs - lastCustomMapFadeCheck < CUSTOM_MAP_FADE_CHECK_INTERVAL_MS) return;
+  lastCustomMapFadeCheck = nowMs;
+  for (let i = customMapRevealEvents.length - 1; i >= 0; i--) {
+    const ev = customMapRevealEvents[i];
+    const age = nowMs - ev.bornTime;
+    const t = Math.min(1, age / CUSTOM_MAP_CRATER_FADE_MS);
+    const target = ev.startIntensity + (1 - ev.startIntensity) * t;
+    if (target > ev.lastAppliedIntensity + 0.01) {
+      revealCustomMapDamageNear(ev.x, ev.y, ev.radius, target - ev.lastAppliedIntensity);
+      ev.lastAppliedIntensity = target;
+    }
+    if (t >= 1) {
+      customMapRevealEvents.splice(i, 1);
+    }
+  }
+}
+
 function revealCustomMapDamageNear(worldX, worldY, worldRadius, intensity) {
   if (!activeCustomMapId || !customMapRevealCtx) return;
   const cfg = CUSTOM_MAPS[activeCustomMapId];
@@ -6837,6 +6895,8 @@ function loadCustomMap(mapId, onReady) {
   // why that check exists) could wrongly treat a genuinely new hit here as
   // a duplicate of that old, unrelated one.
   craters = [];
+  customMapRevealEvents = [];
+  lastCustomMapFadeCheck = 0;
   // Resizing damageCanvas.width/height above already clears its pixels as
   // a side effect of the resize itself - this clearRect is not covering a
   // gap in that, it is only here so a SECOND load of the SAME custom map
@@ -10382,6 +10442,7 @@ function resolveHit(p) {
     // happens, growing with repeated hits rather than all at once - capped
     // per-hit so one shot never fully reveals an area outright.
     revealCustomMapDamageNear(impactX, impactY, p.blastRadius, Math.min(0.35, p.dmg/150));
+    trackCustomMapRevealEvent(impactX, impactY, p.blastRadius, Math.min(0.35, p.dmg/150), performance.now());
     return;
   }
 
@@ -10398,6 +10459,7 @@ function resolveHit(p) {
     // area, since this is a single aimed shot rather than an explosion.
     damageCustomMapCellsNear(impactX, impactY, DIRECT_HIT_CELL_RADIUS, p.dmg);
     revealCustomMapDamageNear(impactX, impactY, DIRECT_HIT_CELL_RADIUS, Math.min(0.35, p.dmg/150));
+    trackCustomMapRevealEvent(impactX, impactY, DIRECT_HIT_CELL_RADIUS, Math.min(0.35, p.dmg/150), performance.now());
     return;
   }
   // target died mid-flight: fall back to nearest opposite-team entity to the impact point
@@ -10414,6 +10476,7 @@ function resolveHit(p) {
   spawnImpactFlash(p.tx, p.ty, p.unitType);
   damageCustomMapCellsNear(p.tx, p.ty, DIRECT_HIT_CELL_RADIUS, p.dmg);
   revealCustomMapDamageNear(p.tx, p.ty, DIRECT_HIT_CELL_RADIUS, Math.min(0.35, p.dmg/150));
+  trackCustomMapRevealEvent(p.tx, p.ty, DIRECT_HIT_CELL_RADIUS, Math.min(0.35, p.dmg/150), performance.now());
 }
 const DIRECT_HIT_CELL_RADIUS = TERRAIN_CELL * 0.75;
 
@@ -11975,6 +12038,7 @@ function enterPlayMode(mapSize, biome, mechsCanCapture, neutralStartRed, customM
     // there's no correctness gap either way - this is just hygiene.
     customMapCompositeCanvas = null; customMapCompositeCtx = null;
     customMapRevealCanvas = null; customMapRevealCtx = null;
+    customMapRevealEvents = [];
     generateNewMap(mapSize || 'medium', biome || 'desert');
     startPlayMode();
   }
@@ -13037,6 +13101,7 @@ function gameLoop(now) {
     // here (not per-hit inside resolveHit itself) regardless of how many
     // cells changed this frame. See customMapNavDirty's own comment.
     if (customMapNavDirty) { buildNavGrid(); customMapNavDirty = false; }
+    updateCustomMapCraterFade(now);
     updateExplosions();
     updateBurningDebris();
     updateWrecks(dt);
@@ -13074,6 +13139,7 @@ function gameLoop(now) {
     updateProjectiles(dt);
     // See the identical comment on the test-mode branch above.
     if (customMapNavDirty) { buildNavGrid(); customMapNavDirty = false; }
+    updateCustomMapCraterFade(now);
     updateExplosions();
     updateBurningDebris();
     updateWrecks(dt);
