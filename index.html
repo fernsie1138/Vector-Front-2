@@ -840,7 +840,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 173;
+const GAME_VERSION = 175;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -6587,6 +6587,111 @@ function colorCloseEnough(r,g,b, target, tolerance=40) {
 // and indexing genTerrain uses for procedural maps - so isMountain(),
 // buildNavGrid(), and every collision/pathfinding call site that already
 // exists need no changes at all to respect this map's layout.
+// Per-cell "how much more damage until this cell opens up" for every
+// building/wall cell on the active custom map - 0 for every other cell
+// (water, trees, open ground), same terrainCols*terrainRows indexing as
+// mountainSolid. Populated by processCustomMapMask below; drained by
+// damageCustomMapCellsNear as explosions/hits land near a cell, which
+// clears that cell's mountainSolid entry once its HP reaches 0 - this is
+// the actual "destruction mask applies to the collision mask" mechanism.
+let customMapCellHp = null;
+// Walls are deliberately tougher than ordinary buildings here (120 vs 60) -
+// a wall is meant to hold up under sustained fire before a breach opens,
+// while an individual building giving way faster reads as the lighter
+// structure it visually is.
+const CUSTOM_MAP_CELL_HP = { building: 60, wall: 120 };
+// Set by damageCustomMapCellsNear whenever a cell actually transitions
+// from solid to passable; checked once per frame (see gameLoop) rather
+// than rebuilding the nav grid synchronously inside resolveHit, since a
+// single frame of heavy combat can land many hits and a full nav grid
+// rebuild is too expensive to repeat for every one of them individually.
+let customMapNavDirty = false;
+
+// Damage-reveal compositing: the actual background image render() draws
+// for a custom map (customMapCompositeCanvas) starts as a copy of the
+// undamaged artwork and is incrementally updated - never fully redrawn -
+// as damage accumulates, letting the damaged artwork show through exactly
+// where the battle has actually scarred the ground, growing with repeated
+// hits rather than switching all at once. customMapRevealCanvas is the
+// running "how revealed is the damaged art here" alpha mask that drives
+// that compositing; both are kept at the SOURCE artwork's own resolution
+// (1254x1254-ish) rather than WORLD's much larger pixel size - compositing
+// is far cheaper there, and render() already scales this composite up to
+// the WORLD rectangle exactly the way it scales the plain undamaged image
+// today, so nothing downstream needs to know the difference.
+let customMapRevealCanvas = null, customMapRevealCtx = null;
+let customMapCompositeCanvas = null, customMapCompositeCtx = null;
+// Reused scratch canvas for the "damaged image masked by reveal alpha"
+// step in revealCustomMapDamageNear - sized up to whatever the largest
+// stamp so far has needed, rather than allocating a fresh canvas per hit.
+let customMapRevealScratch = null, customMapRevealScratchCtx = null;
+
+function initCustomMapCompositing(mapId) {
+  const imgs = customMapImages[mapId];
+  const w = imgs.undamaged.naturalWidth || imgs.mask.naturalWidth;
+  const h = imgs.undamaged.naturalHeight || imgs.mask.naturalHeight;
+  customMapRevealCanvas = document.createElement('canvas');
+  customMapRevealCanvas.width = w; customMapRevealCanvas.height = h;
+  customMapRevealCtx = customMapRevealCanvas.getContext('2d');
+  customMapCompositeCanvas = document.createElement('canvas');
+  customMapCompositeCanvas.width = w; customMapCompositeCanvas.height = h;
+  customMapCompositeCtx = customMapCompositeCanvas.getContext('2d');
+  customMapCompositeCtx.drawImage(imgs.undamaged, 0, 0, w, h);
+  customMapRevealScratch = document.createElement('canvas');
+  customMapRevealScratchCtx = customMapRevealScratch.getContext('2d');
+}
+
+// Reveals the damaged artwork through at (worldX, worldY), growing the
+// cumulative alpha mask there by `intensity` (0-1) within `worldRadius` -
+// called from resolveHit at every impact point (mirroring
+// damageCustomMapCellsNear's own hook points) so the battlefield
+// progressively shows war damage as fighting actually happens there, and
+// again at full intensity the moment a building/wall cell is actually
+// destroyed (see damageCustomMapCellsNear), so a spot that has genuinely
+// opened up for movement always reads as visibly destroyed too, not just
+// partially scarred.
+function revealCustomMapDamageNear(worldX, worldY, worldRadius, intensity) {
+  if (!activeCustomMapId || !customMapRevealCtx) return;
+  const cfg = CUSTOM_MAPS[activeCustomMapId];
+  const ix = worldX / cfg.worldScale, iy = worldY / cfg.worldScale;
+  const ir = Math.max(4, worldRadius / cfg.worldScale);
+
+  const grad = customMapRevealCtx.createRadialGradient(ix, iy, 0, ix, iy, ir);
+  grad.addColorStop(0, `rgba(255,255,255,${Math.max(0,Math.min(1,intensity))})`);
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  customMapRevealCtx.fillStyle = grad;
+  customMapRevealCtx.beginPath();
+  customMapRevealCtx.arc(ix, iy, ir, 0, Math.PI*2);
+  customMapRevealCtx.fill();
+
+  const imgs = customMapImages[activeCustomMapId];
+  const pad = 2;
+  const rx = Math.max(0, Math.floor(ix-ir-pad)), ry = Math.max(0, Math.floor(iy-ir-pad));
+  const rw = Math.max(0, Math.min(customMapCompositeCanvas.width-rx, Math.ceil(ir*2+pad*2)));
+  const rh = Math.max(0, Math.min(customMapCompositeCanvas.height-ry, Math.ceil(ir*2+pad*2)));
+  if (rw <= 0 || rh <= 0) return;
+
+  // Re-derive this region from scratch each time (undamaged base, then
+  // damaged masked by the CURRENT cumulative alpha) rather than trying to
+  // incrementally layer onto the already-composited result - correct
+  // regardless of how many times this exact spot has been hit before.
+  customMapCompositeCtx.clearRect(rx, ry, rw, rh);
+  customMapCompositeCtx.drawImage(imgs.undamaged, rx, ry, rw, rh, rx, ry, rw, rh);
+
+  if (customMapRevealScratch.width < rw || customMapRevealScratch.height < rh) {
+    customMapRevealScratch.width = Math.max(customMapRevealScratch.width, rw);
+    customMapRevealScratch.height = Math.max(customMapRevealScratch.height, rh);
+  }
+  customMapRevealScratchCtx.clearRect(0, 0, rw, rh);
+  customMapRevealScratchCtx.globalCompositeOperation = 'source-over';
+  customMapRevealScratchCtx.drawImage(imgs.damaged, rx, ry, rw, rh, 0, 0, rw, rh);
+  customMapRevealScratchCtx.globalCompositeOperation = 'destination-in';
+  customMapRevealScratchCtx.drawImage(customMapRevealCanvas, rx, ry, rw, rh, 0, 0, rw, rh);
+  customMapRevealScratchCtx.globalCompositeOperation = 'source-over';
+
+  customMapCompositeCtx.drawImage(customMapRevealScratch, 0, 0, rw, rh, rx, ry, rw, rh);
+}
+
 function processCustomMapMask(mapId) {
   const cfg = CUSTOM_MAPS[mapId];
   const maskImg = customMapImages[mapId].mask;
@@ -6601,6 +6706,7 @@ function processCustomMapMask(mapId) {
     const i = (py*off.width + px) * 4;
     return [data[i], data[i+1], data[i+2]];
   }
+  customMapCellHp = new Uint8Array(terrainCols * terrainRows);
   for (let row = 0; row < terrainRows; row++) {
     for (let col = 0; col < terrainCols; col++) {
       const worldX = col*TERRAIN_CELL, worldY = row*TERRAIN_CELL;
@@ -6610,11 +6716,49 @@ function processCustomMapMask(mapId) {
       const idx = row*terrainCols + col;
       if (colorCloseEnough(c[0],c[1],c[2], CUSTOM_MAP_MASK_COLORS.water)) {
         lakeSolid[idx] = 1;
-      } else if (colorCloseEnough(c[0],c[1],c[2], CUSTOM_MAP_MASK_COLORS.wall) ||
-                 colorCloseEnough(c[0],c[1],c[2], CUSTOM_MAP_MASK_COLORS.building)) {
-        // Phase 1: both fully block, like a mountain - see the deferred-work
-        // note on this function for what's intentionally not done yet.
+      } else if (colorCloseEnough(c[0],c[1],c[2], CUSTOM_MAP_MASK_COLORS.wall)) {
         mountainSolid[idx] = 1;
+        customMapCellHp[idx] = CUSTOM_MAP_CELL_HP.wall;
+      } else if (colorCloseEnough(c[0],c[1],c[2], CUSTOM_MAP_MASK_COLORS.building)) {
+        mountainSolid[idx] = 1;
+        customMapCellHp[idx] = CUSTOM_MAP_CELL_HP.building;
+      }
+    }
+  }
+}
+// Applies `amount` damage to every destructible (building/wall) cell within
+// `radius` of (x,y) - called from resolveHit at every impact point, only
+// when a custom map is active (procedural maps have no customMapCellHp at
+// all, so this is a no-op there via the null check). A cell that reaches 0
+// HP immediately becomes passable (mountainSolid cleared) and sets
+// customMapNavDirty so the next frame's nav grid rebuild picks up the
+// change - see gameLoop. Cells with 0 HP to begin with (water, trees, open
+// ground - never populated above) are skipped entirely, so this never
+// touches anything but actual building/wall cells.
+function damageCustomMapCellsNear(x, y, radius, amount) {
+  if (!customMapCellHp || !activeCustomMapId || amount <= 0) return;
+  const minCol = Math.max(0, Math.floor((x-radius)/TERRAIN_CELL));
+  const maxCol = Math.min(terrainCols-1, Math.ceil((x+radius)/TERRAIN_CELL));
+  const minRow = Math.max(0, Math.floor((y-radius)/TERRAIN_CELL));
+  const maxRow = Math.min(terrainRows-1, Math.ceil((y+radius)/TERRAIN_CELL));
+  for (let row = minRow; row <= maxRow; row++) {
+    for (let col = minCol; col <= maxCol; col++) {
+      const idx = row*terrainCols + col;
+      if (customMapCellHp[idx] <= 0) continue;
+      const cx = col*TERRAIN_CELL, cy = row*TERRAIN_CELL;
+      if (Math.hypot(cx-x, cy-y) > radius) continue;
+      const newHp = Math.max(0, customMapCellHp[idx] - amount);
+      customMapCellHp[idx] = newHp;
+      if (newHp === 0 && mountainSolid[idx] === 1) {
+        mountainSolid[idx] = 0;
+        customMapNavDirty = true;
+        // A cell that has actually opened up for movement should always
+        // read as visibly destroyed too, not just however partially
+        // scarred the accumulated hits up to this point happened to leave
+        // it - full intensity here, independent of and in addition to
+        // whatever revealCustomMapDamageNear call already ran at the
+        // blast's own center in resolveHit.
+        revealCustomMapDamageNear(cx, cy, TERRAIN_CELL*0.75, 1);
       }
     }
   }
@@ -6641,6 +6785,27 @@ function loadCustomMap(mapId, onReady) {
   lakeSolid = new Uint8Array(terrainCols * terrainRows);
   crevasseSolid = new Uint8Array(terrainCols * terrainRows);
   riverSolid = new Uint8Array(terrainCols * terrainRows);
+  // The rest of what applyMapSize normally does for a new WORLD size, all
+  // missed the first time around since loadCustomMap reimplemented just
+  // the terrain-grid part of it directly rather than calling it: nav grid
+  // (buildNavGrid() below assumes navBlocked is already sized correctly -
+  // it does not resize it itself), fog grid (this is the reported bug -
+  // fogCols/fogRows/fogGrid/fogExplored were simply left at whatever the
+  // previous map's dimensions were, so fog only ever covered a
+  // previous-map-sized rectangle instead of this map's actual, different
+  // WORLD size), and the damage canvas (which also needs to match WORLD
+  // exactly, or baked craters/scorch would be positioned and clipped
+  // against the wrong canvas size).
+  navCols = Math.ceil(WORLD.w / NAV_CELL) + 1;
+  navRows = Math.ceil(WORLD.h / NAV_CELL) + 1;
+  navBlocked = new Uint8Array(navCols * navRows);
+  fogCols = Math.ceil(WORLD.w / FOG_CELL) + 1;
+  fogRows = Math.ceil(WORLD.h / FOG_CELL) + 1;
+  fogGrid = new Uint8Array(fogCols * fogRows);
+  fogExplored = new Uint8Array(fogCols * fogRows);
+  damageCanvas.width = WORLD.w;
+  damageCanvas.height = WORLD.h;
+  testAreaCenter.x = WORLD.w/2; testAreaCenter.y = WORLD.h/2;
   // Base corners: opposite corners of the map, same 260px-equivalent
   // margin convention applyMapSize uses, so both teams start well clear of
   // the central compound regardless of its exact footprint. Clamped to a
@@ -6663,9 +6828,30 @@ function loadCustomMap(mapId, onReady) {
   mountains.length = 0;
   lakes.length = 0;
   rivers.length = 0;
+  // Stale battle-damage data from whatever map was played before this one -
+  // generateNewMap's procedural path already does this (see its own
+  // "fresh map, no battle damage yet" comment) but loadCustomMap never
+  // did. Without it, a crater from the previous map could still be sitting
+  // in this array at that old map's coordinates, and spawnExplosion's own
+  // "merge with an existing nearby crater" check (see its own comment on
+  // why that check exists) could wrongly treat a genuinely new hit here as
+  // a duplicate of that old, unrelated one.
+  craters = [];
+  // Resizing damageCanvas.width/height above already clears its pixels as
+  // a side effect of the resize itself - this clearRect is not covering a
+  // gap in that, it is only here so a SECOND load of the SAME custom map
+  // (same WORLD size as before, so the resize above is a same-size no-op
+  // that does NOT implicitly clear anything) still starts with a clean
+  // damage layer rather than the previous session's craters still baked in.
+  damageCtx.clearRect(0, 0, damageCanvas.width, damageCanvas.height);
   function finishWhenMaskReady() {
-    if (!customMapImageReady[mapId].mask) { setTimeout(finishWhenMaskReady, 50); return; }
+    // Also wait on undamaged+damaged now, not just the mask -
+    // initCustomMapCompositing below needs both actually decoded (reads
+    // undamaged's naturalWidth/Height, draws both images).
+    const ready = customMapImageReady[mapId];
+    if (!ready.mask || !ready.undamaged || !ready.damaged) { setTimeout(finishWhenMaskReady, 50); return; }
     processCustomMapMask(mapId);
+    initCustomMapCompositing(mapId);
     buildNavGrid();
     // Mirrors the tail end of generateNewMap (reposition the persistent
     // base entities, then place every supply depot) - skipped entirely by
@@ -10188,6 +10374,14 @@ function resolveHit(p) {
       }
     });
     spawnExplosion(impactX, impactY, p.blastRadius, p.dmg);
+    // Splash naturally has its own blast radius already - a custom map's
+    // building/wall cells within that same radius take the same damage
+    // the blast dealt to units there.
+    damageCustomMapCellsNear(impactX, impactY, p.blastRadius, p.dmg);
+    // Gradually reveals the damaged artwork wherever fighting actually
+    // happens, growing with repeated hits rather than all at once - capped
+    // per-hit so one shot never fully reveals an area outright.
+    revealCustomMapDamageNear(impactX, impactY, p.blastRadius, Math.min(0.35, p.dmg/150));
     return;
   }
 
@@ -10198,6 +10392,12 @@ function resolveHit(p) {
   if (p.targetRef && p.targetRef.alive) {
     damageEntity(p.targetRef, p.dmg);
     spawnImpactFlash(impactX, impactY, p.unitType);
+    // A direct (non-splash) round has no blast radius of its own, but the
+    // shell still physically lands somewhere - DIRECT_HIT_CELL_RADIUS
+    // covers just the impact cell and its immediate neighbor, not a wide
+    // area, since this is a single aimed shot rather than an explosion.
+    damageCustomMapCellsNear(impactX, impactY, DIRECT_HIT_CELL_RADIUS, p.dmg);
+    revealCustomMapDamageNear(impactX, impactY, DIRECT_HIT_CELL_RADIUS, Math.min(0.35, p.dmg/150));
     return;
   }
   // target died mid-flight: fall back to nearest opposite-team entity to the impact point
@@ -10212,7 +10412,10 @@ function resolveHit(p) {
     damageEntity(best, p.dmg);
   }
   spawnImpactFlash(p.tx, p.ty, p.unitType);
+  damageCustomMapCellsNear(p.tx, p.ty, DIRECT_HIT_CELL_RADIUS, p.dmg);
+  revealCustomMapDamageNear(p.tx, p.ty, DIRECT_HIT_CELL_RADIUS, Math.min(0.35, p.dmg/150));
 }
+const DIRECT_HIT_CELL_RADIUS = TERRAIN_CELL * 0.75;
 
 // Spawns a short-lived animated explosion effect at a world position, including
 // a handful of small debris chips that fly outward and tumble as they fade.
@@ -11758,6 +11961,20 @@ function enterPlayMode(mapSize, biome, mechsCanCapture, neutralStartRed, customM
     loadCustomMap(customMap, startPlayMode);
   } else {
     activeCustomMapId = null;
+    // Not strictly load-bearing (damageCustomMapCellsNear's own
+    // !activeCustomMapId check already no-ops it on a procedural map
+    // regardless), but leaving the previous custom map's HP array sitting
+    // around - wrong size for this map, stale data - is a trap for any
+    // future code that reads it without also checking activeCustomMapId
+    // first the way today's code does.
+    customMapCellHp = null;
+    // Same reasoning as customMapCellHp just above - render()'s own
+    // activeCustomMapId check already keeps a stale composite from ever
+    // being drawn on a procedural map, but a fresh loadCustomMap recreates
+    // these from scratch regardless (see initCustomMapCompositing), so
+    // there's no correctness gap either way - this is just hygiene.
+    customMapCompositeCanvas = null; customMapCompositeCtx = null;
+    customMapRevealCanvas = null; customMapRevealCtx = null;
     generateNewMap(mapSize || 'medium', biome || 'desert');
     startPlayMode();
   }
@@ -12815,6 +13032,11 @@ function gameLoop(now) {
     resolveUnitCollisions();
     updateLRMLaunchQueues(dt);
     updateProjectiles(dt);
+    // A custom map's building/wall cells can be damaged to the point of
+    // opening up during this frame's projectile resolution - rebuilt once
+    // here (not per-hit inside resolveHit itself) regardless of how many
+    // cells changed this frame. See customMapNavDirty's own comment.
+    if (customMapNavDirty) { buildNavGrid(); customMapNavDirty = false; }
     updateExplosions();
     updateBurningDebris();
     updateWrecks(dt);
@@ -12850,6 +13072,8 @@ function gameLoop(now) {
     updateStuckUnitAvoidance(dt);
     updateLRMLaunchQueues(dt);
     updateProjectiles(dt);
+    // See the identical comment on the test-mode branch above.
+    if (customMapNavDirty) { buildNavGrid(); customMapNavDirty = false; }
     updateExplosions();
     updateBurningDebris();
     updateWrecks(dt);
@@ -12912,13 +13136,22 @@ function render() {
   ctx.rect(clipTL.x, clipTL.y, clipBR.x-clipTL.x, clipBR.y-clipTL.y);
   ctx.clip();
 
-  // Custom illustrated map: the undamaged artwork drawn as a single image
-  // covering exactly the WORLD rectangle, in place of the ground fill +
-  // tiled texture pattern procedural maps use - this IS the ground layer
-  // for a hand-authored map, not something drawn on top of a separate
-  // base fill. (Damage-reveal blending toward the damaged artwork is a
-  // follow-up - see processCustomMapMask's comment for Phase 1 scope.)
-  if (activeCustomMapId && customMapImageReady[activeCustomMapId].undamaged) {
+  // Custom illustrated map: the ground layer is customMapCompositeCanvas,
+  // not the undamaged artwork directly - it starts as a copy of the
+  // undamaged art and is incrementally updated as battle damage reveals
+  // the damaged art through in exactly the areas actually fought over (see
+  // initCustomMapCompositing/revealCustomMapDamageNear). Drawn the same
+  // way the plain undamaged image used to be: a single image stretched to
+  // cover exactly the WORLD rectangle, in place of the ground fill + tiled
+  // texture pattern procedural maps use. Falls back to the raw undamaged
+  // image for the brief window before compositing has initialized (it
+  // needs both the undamaged and damaged images decoded first - see
+  // finishWhenMaskReady), so the map doesn't render blank in that gap.
+  if (activeCustomMapId && customMapCompositeCanvas) {
+    const bgtl = worldToScreen(0,0);
+    const bgbr = worldToScreen(WORLD.w, WORLD.h);
+    ctx.drawImage(customMapCompositeCanvas, bgtl.x, bgtl.y, bgbr.x-bgtl.x, bgbr.y-bgtl.y);
+  } else if (activeCustomMapId && customMapImageReady[activeCustomMapId].undamaged) {
     const bgtl = worldToScreen(0,0);
     const bgbr = worldToScreen(WORLD.w, WORLD.h);
     ctx.drawImage(customMapImages[activeCustomMapId].undamaged, bgtl.x, bgtl.y, bgbr.x-bgtl.x, bgbr.y-bgtl.y);
