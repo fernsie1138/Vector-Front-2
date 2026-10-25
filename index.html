@@ -577,6 +577,13 @@
     </div>
   </div>
   <div class="optionGroup">
+    <div class="optionLabel">Custom Map</div>
+    <div class="optionRow">
+      <button class="optionBtn" id="optCustomMapOff" data-group="customMap" data-value="off">OFF (PROCEDURAL)</button>
+      <button class="optionBtn" id="optCustomMapCompound01" data-group="customMap" data-value="compound01">WALLED COMPOUND</button>
+    </div>
+  </div>
+  <div class="optionGroup">
     <div class="optionLabel">Biome</div>
     <div class="optionRow">
       <button class="optionBtn" id="optBiomeDesert" data-group="biome" data-value="desert">DESERT</button>
@@ -833,7 +840,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 172;
+const GAME_VERSION = 173;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -916,6 +923,51 @@ Object.keys(ROAD_TILE_DATA_URIS).forEach(key => {
   img.src = ROAD_TILE_DATA_URIS[key];
   roadTileImages[shortKey] = img;
 });
+// Custom illustrated maps: a hand-authored map is a folder of 3 images
+// (undamaged full-map illustration, damaged full-map illustration, and a
+// flat-color collision mask - see CUSTOM_MAP_MASK_COLORS below for what
+// each color means) rather than anything procedurally generated. Loaded
+// the same lazy-Image way every other asset in this file is; a custom map
+// is playable once both scene images are ready, and its mask image is
+// processed into the game's normal solid/cover grids by
+// processCustomMapMask() the moment IT finishes loading (see
+// loadCustomMap() further down).
+const CUSTOM_MAPS = {
+  compound01: {
+    label: 'Walled Compound',
+    undamagedSrc: 'assets/terrain/custom_maps/compound01/undamaged.png',
+    damagedSrc: 'assets/terrain/custom_maps/compound01/damaged.png',
+    maskSrc: 'assets/terrain/custom_maps/compound01/collision_mask.png',
+    // World units per source-image pixel. Picked so the compound (about
+    // 360px across in the source art) reads as a large, multi-building
+    // base at a scale consistent with this game's existing unit/weapon
+    // ranges - comparable in on-screen size to the procedural game's own
+    // base compounds, rather than scaling the image to any particular
+    // WORLD size.
+    worldScale: 2.5,
+  },
+};
+const customMapImages = {}; // e.g. customMapImages.compound01.undamaged -> HTMLImageElement
+const customMapImageReady = {};
+Object.keys(CUSTOM_MAPS).forEach(mapId => {
+  const cfg = CUSTOM_MAPS[mapId];
+  customMapImageReady[mapId] = { undamaged: false, damaged: false, mask: false };
+  const undamagedImg = new Image();
+  undamagedImg.onload = () => { customMapImageReady[mapId].undamaged = true; };
+  undamagedImg.src = cfg.undamagedSrc;
+  const damagedImg = new Image();
+  damagedImg.onload = () => { customMapImageReady[mapId].damaged = true; };
+  damagedImg.src = cfg.damagedSrc;
+  const maskImg = new Image();
+  maskImg.onload = () => { customMapImageReady[mapId].mask = true; };
+  maskImg.src = cfg.maskSrc;
+  customMapImages[mapId] = { undamaged: undamagedImg, damaged: damagedImg, mask: maskImg };
+});
+// Current custom map in play, if any; null means the active map is a
+// normal procedurally generated one. Checked by generateNewMap-adjacent
+// code and by render()'s ground-layer drawing.
+let activeCustomMapId = null;
+
 function spritesReadyFor(unitType) {
   if (HULL_TURRET_UNITS.includes(unitType)) {
     return !!(spriteReady['hull_'+unitType] && spriteReady['turret_'+unitType]);
@@ -6508,6 +6560,143 @@ placeExtraRandomSupplyDepots(3);
 // rebuilds everything at the chosen size before startPlayMode populates it
 // with units.
 // ---------------------------------------------------------------------------
+// PHASE 1 of custom-map support: gets a hand-illustrated map's undamaged
+// artwork loading, rendering at the right scale, and playable, with its
+// mask processed into basic fully-blocking collision (water, the compound
+// wall, and the compound's buildings all stop every unit type the same way
+// a mountain does). Two things are DELIBERATELY NOT YET implemented and
+// are a separate follow-up: (1) the buildings/trees being passable to
+// infantry but not vehicles specifically (the mask distinguishes trees
+// from buildings already, but neither blocks movement for any unit type
+// yet - trees are drawn but not collided with at all, same as this map's
+// buildings will need a vehicle-only block instead of today's full block),
+// and (2) the wall and buildings being destructible (today they are
+// permanently solid, like a mountain - no HP, no transition to passable).
+// Flat colors this mask uses, matching how collision_mask.png was authored:
+const CUSTOM_MAP_MASK_COLORS = {
+  water:    [0, 80, 220],
+  trees:    [0, 180, 0],
+  building: [200, 0, 0],
+  wall:     [120, 0, 160],
+};
+function colorCloseEnough(r,g,b, target, tolerance=40) {
+  return Math.abs(r-target[0]) <= tolerance && Math.abs(g-target[1]) <= tolerance && Math.abs(b-target[2]) <= tolerance;
+}
+// Reads the mask image's pixels (via an offscreen canvas) and stamps
+// mountainSolid/lakeSolid at TERRAIN_CELL resolution, the exact same grids
+// and indexing genTerrain uses for procedural maps - so isMountain(),
+// buildNavGrid(), and every collision/pathfinding call site that already
+// exists need no changes at all to respect this map's layout.
+function processCustomMapMask(mapId) {
+  const cfg = CUSTOM_MAPS[mapId];
+  const maskImg = customMapImages[mapId].mask;
+  const off = document.createElement('canvas');
+  off.width = maskImg.naturalWidth;
+  off.height = maskImg.naturalHeight;
+  const octx = off.getContext('2d');
+  octx.drawImage(maskImg, 0, 0);
+  const data = octx.getImageData(0, 0, off.width, off.height).data;
+  function maskColorAt(px, py) {
+    if (px < 0 || py < 0 || px >= off.width || py >= off.height) return null;
+    const i = (py*off.width + px) * 4;
+    return [data[i], data[i+1], data[i+2]];
+  }
+  for (let row = 0; row < terrainRows; row++) {
+    for (let col = 0; col < terrainCols; col++) {
+      const worldX = col*TERRAIN_CELL, worldY = row*TERRAIN_CELL;
+      const px = Math.round(worldX / cfg.worldScale), py = Math.round(worldY / cfg.worldScale);
+      const c = maskColorAt(px, py);
+      if (!c) continue;
+      const idx = row*terrainCols + col;
+      if (colorCloseEnough(c[0],c[1],c[2], CUSTOM_MAP_MASK_COLORS.water)) {
+        lakeSolid[idx] = 1;
+      } else if (colorCloseEnough(c[0],c[1],c[2], CUSTOM_MAP_MASK_COLORS.wall) ||
+                 colorCloseEnough(c[0],c[1],c[2], CUSTOM_MAP_MASK_COLORS.building)) {
+        // Phase 1: both fully block, like a mountain - see the deferred-work
+        // note on this function for what's intentionally not done yet.
+        mountainSolid[idx] = 1;
+      }
+    }
+  }
+}
+// Sets up a hand-illustrated map in place of procedural generation: world
+// size matches the source art (scaled by worldScale), base spawn points go
+// in opposite corners away from the central compound, and the mask is
+// processed into collision once its image has actually finished loading
+// (it may still be in flight - this polls rather than assuming readiness,
+// since image loads are asynchronous and this can be called right after
+// the page itself loads).
+function loadCustomMap(mapId, onReady) {
+  const cfg = CUSTOM_MAPS[mapId];
+  const imgs = customMapImages[mapId];
+  activeCustomMapId = mapId;
+  savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null, jungle: null, wasteland: null };
+  currentMapSize = 'custom';
+  WORLD.w = Math.round(imgs.mask.naturalWidth * cfg.worldScale) || Math.round(1254 * cfg.worldScale);
+  WORLD.h = Math.round(imgs.mask.naturalHeight * cfg.worldScale) || Math.round(1254 * cfg.worldScale);
+  camera.x = WORLD.w/2; camera.y = WORLD.h/2;
+  terrainCols = Math.ceil(WORLD.w / TERRAIN_CELL) + 1;
+  terrainRows = Math.ceil(WORLD.h / TERRAIN_CELL) + 1;
+  mountainSolid = new Uint8Array(terrainCols * terrainRows);
+  lakeSolid = new Uint8Array(terrainCols * terrainRows);
+  crevasseSolid = new Uint8Array(terrainCols * terrainRows);
+  riverSolid = new Uint8Array(terrainCols * terrainRows);
+  // Base corners: opposite corners of the map, same 260px-equivalent
+  // margin convention applyMapSize uses, so both teams start well clear of
+  // the central compound regardless of its exact footprint. Clamped to a
+  // fraction of the map's own size (not just the fixed 260) so a smaller
+  // custom map can never push a base to a negative/off-map coordinate the
+  // way an unclamped margin could.
+  const margin = Math.max(40, Math.min(260, Math.min(WORLD.w, WORLD.h) * 0.15));
+  blueBaseStart.x = margin; blueBaseStart.y = margin;
+  redBaseStart.x = WORLD.w - margin; redBaseStart.y = WORLD.h - margin;
+  // blueBase/redBase are the same two persistent objects for the whole
+  // page session and are only ever pushed into entities once - clearing
+  // the array without restoring them here would leave both bases
+  // "existing" (still correct hp/x/y on direct access) but invisible and
+  // unusable everywhere that finds them by filtering entities, exactly
+  // the bug returnToLaunchScreen's own comment warns about above.
+  entities.length = 0;
+  entities.push(blueBase, redBase);
+  trees.length = 0;
+  buildings.length = 0;
+  mountains.length = 0;
+  lakes.length = 0;
+  rivers.length = 0;
+  function finishWhenMaskReady() {
+    if (!customMapImageReady[mapId].mask) { setTimeout(finishWhenMaskReady, 50); return; }
+    processCustomMapMask(mapId);
+    buildNavGrid();
+    // Mirrors the tail end of generateNewMap (reposition the persistent
+    // base entities, then place every supply depot) - skipped entirely by
+    // this function up to here since none of it applies to a custom map
+    // (no procedural terrain to place depots around), but this part is NOT
+    // procedural-specific: without it there would be no home depots for
+    // either team and no neutral depots at all, i.e. no economy. Run only
+    // now, after the mask is processed and buildNavGrid has a real nav
+    // grid for this map, since depot placement needs to know what terrain
+    // is actually passable.
+    blueBase.x = blueBaseStart.x; blueBase.y = blueBaseStart.y;
+    redBase.x = redBaseStart.x; redBase.y = redBaseStart.y;
+    for (let i = entities.length - 1; i >= 0; i--) {
+      if (entities[i].kind === 'supply') entities.splice(i, 1);
+    }
+    placeSupplyBuildings('blue', blueBase);
+    placeSupplyBuildings('red', redBase);
+    placeNeutralSupplyDepots();
+    const extraDepots = (MAP_SIZES[currentMapSize] || MAP_SIZES.medium).extraDepots;
+    placeExtraRandomSupplyDepots(extraDepots);
+    // Base repositioning and depot placement above are asynchronous (they
+    // wait on the mask image load), so startPlayMode - which reads
+    // blueBase/redBase's position to spawn starting infantry and frame the
+    // camera - must not run until all of this has actually finished, or it
+    // would use whatever stale position the bases were left at by the
+    // previous map.
+    if (onReady) onReady();
+  }
+  finishWhenMaskReady();
+}
+
 function generateNewMap(sizeKey, biomeKey) {
   // A new game gets a newly generated visual tile layout. A loaded game sets
   // savedTileLayouts below and therefore reproduces its exact map instead.
@@ -11548,7 +11737,7 @@ document.getElementById('btnRestart').addEventListener('click', ()=> location.re
 document.getElementById('versionTag').textContent = 'v' + GAME_VERSION;
 document.getElementById('launchVersion').textContent = 'v' + GAME_VERSION;
 
-function enterPlayMode(mapSize, biome, mechsCanCapture, neutralStartRed) {
+function enterPlayMode(mapSize, biome, mechsCanCapture, neutralStartRed, customMap) {
   mechsCanCaptureSupply = !!mechsCanCapture;
   // Must be set before generateNewMap runs below - that's what actually
   // calls placeNeutralSupplyDepots/placeExtraRandomSupplyDepots, which read
@@ -11557,8 +11746,21 @@ function enterPlayMode(mapSize, biome, mechsCanCapture, neutralStartRed) {
   appState = 'play';
   document.getElementById('launchScreen').style.display = 'none';
   document.getElementById('btnTestDone').style.display = 'none';
-  generateNewMap(mapSize || 'medium', biome || 'desert');
-  startPlayMode();
+  // A custom illustrated map entirely replaces procedural generation -
+  // mapSize/biome are meaningless for one (its world size comes from the
+  // artwork itself, see loadCustomMap) and are simply not applied.
+  // loadCustomMap's own setup (mask processing, base repositioning, depot
+  // placement) is asynchronous - startPlayMode reads blueBase/redBase's
+  // position and must not run until that has actually finished, so it's
+  // passed as the onReady callback here rather than called unconditionally
+  // right after, the way the synchronous generateNewMap path can.
+  if (customMap && customMap !== 'off' && CUSTOM_MAPS[customMap]) {
+    loadCustomMap(customMap, startPlayMode);
+  } else {
+    activeCustomMapId = null;
+    generateNewMap(mapSize || 'medium', biome || 'desert');
+    startPlayMode();
+  }
 }
 function enterTestMode() {
   appState = 'test';
@@ -11759,6 +11961,11 @@ let selectedMapSize = 'medium';
 let selectedBiome = 'desert';
 let selectedMechCapture = 'off';
 let selectedNeutralStartRed = 'off';
+// 'off' means a normal procedural map (selectedMapSize/selectedBiome apply
+// as usual); any other value is a CUSTOM_MAPS key, and when set, the Map
+// Size and Biome choices are ignored entirely in favor of loadCustomMap -
+// see enterPlayMode.
+let selectedCustomMap = 'off';
 function setOptionSelection(group, value) {
   document.querySelectorAll(`.optionBtn[data-group="${group}"]`).forEach(btn=>{
     btn.classList.toggle('selected', btn.dataset.value === value);
@@ -11767,6 +11974,7 @@ function setOptionSelection(group, value) {
   else if (group === 'biome') selectedBiome = value;
   else if (group === 'mechCapture') selectedMechCapture = value;
   else if (group === 'neutralStartRed') selectedNeutralStartRed = value;
+  else if (group === 'customMap') selectedCustomMap = value;
 }
 document.querySelectorAll('.optionBtn').forEach(btn=>{
   btn.addEventListener('click', ()=> setOptionSelection(btn.dataset.group, btn.dataset.value));
@@ -11777,6 +11985,7 @@ setOptionSelection('size', selectedMapSize);
 setOptionSelection('biome', selectedBiome);
 setOptionSelection('mechCapture', selectedMechCapture);
 setOptionSelection('neutralStartRed', selectedNeutralStartRed);
+setOptionSelection('customMap', selectedCustomMap);
 
 document.getElementById('btnOptionsBack').addEventListener('click', ()=>{
   document.getElementById('optionsScreen').style.display = 'none';
@@ -11786,7 +11995,7 @@ document.getElementById('btnOptionsConfirm').addEventListener('click', ()=>{
   document.getElementById('optionsScreen').style.display = 'none';
   // selectedBiome is now genuinely used - see BIOME_CONFIGS/applyBiome for
   // the full per-biome generation differences.
-  enterPlayMode(selectedMapSize, selectedBiome, selectedMechCapture === 'on', selectedNeutralStartRed === 'on');
+  enterPlayMode(selectedMapSize, selectedBiome, selectedMechCapture === 'on', selectedNeutralStartRed === 'on', selectedCustomMap);
 });
 
 // ---------- Unit Options screen ----------
@@ -12703,26 +12912,38 @@ function render() {
   ctx.rect(clipTL.x, clipTL.y, clipBR.x-clipTL.x, clipBR.y-clipTL.y);
   ctx.clip();
 
-  // background: solid earth-tone ground
-  ctx.fillStyle = PALETTE.groundBase;
-  ctx.fillRect(0,0,viewportWidth(),viewportHeight());
+  // Custom illustrated map: the undamaged artwork drawn as a single image
+  // covering exactly the WORLD rectangle, in place of the ground fill +
+  // tiled texture pattern procedural maps use - this IS the ground layer
+  // for a hand-authored map, not something drawn on top of a separate
+  // base fill. (Damage-reveal blending toward the damaged artwork is a
+  // follow-up - see processCustomMapMask's comment for Phase 1 scope.)
+  if (activeCustomMapId && customMapImageReady[activeCustomMapId].undamaged) {
+    const bgtl = worldToScreen(0,0);
+    const bgbr = worldToScreen(WORLD.w, WORLD.h);
+    ctx.drawImage(customMapImages[activeCustomMapId].undamaged, bgtl.x, bgtl.y, bgbr.x-bgtl.x, bgbr.y-bgtl.y);
+  } else if (!activeCustomMapId) {
+    // background: solid earth-tone ground
+    ctx.fillStyle = PALETTE.groundBase;
+    ctx.fillRect(0,0,viewportWidth(),viewportHeight());
 
-  // Ground speckle texture: tiled pattern anchored to WORLD coordinates
-  // (not screen coordinates) via a pattern transform, so the texture stays
-  // fixed to the ground and pans/zooms with the camera exactly like every
-  // other terrain feature, rather than sliding independently as a raw
-  // screen-space tile would. setTransform on the pattern itself (not the
-  // canvas context) is the correct way to reposition a CanvasPattern - it
-  // does not follow ctx.translate/scale the way normal drawing does.
-  if (groundTexturePattern) {
-    const origin = worldToScreen(0, 0);
-    if (groundTexturePattern.setTransform && typeof DOMMatrix !== 'undefined') {
-      groundTexturePattern.setTransform(new DOMMatrix()
-        .translate(origin.x, origin.y)
-        .scale(camera.zoom));
+    // Ground speckle texture: tiled pattern anchored to WORLD coordinates
+    // (not screen coordinates) via a pattern transform, so the texture stays
+    // fixed to the ground and pans/zooms with the camera exactly like every
+    // other terrain feature, rather than sliding independently as a raw
+    // screen-space tile would. setTransform on the pattern itself (not the
+    // canvas context) is the correct way to reposition a CanvasPattern - it
+    // does not follow ctx.translate/scale the way normal drawing does.
+    if (groundTexturePattern) {
+      const origin = worldToScreen(0, 0);
+      if (groundTexturePattern.setTransform && typeof DOMMatrix !== 'undefined') {
+        groundTexturePattern.setTransform(new DOMMatrix()
+          .translate(origin.x, origin.y)
+          .scale(camera.zoom));
+      }
+      ctx.fillStyle = groundTexturePattern;
+      ctx.fillRect(0, 0, viewportWidth(), viewportHeight());
     }
-    ctx.fillStyle = groundTexturePattern;
-    ctx.fillRect(0, 0, viewportWidth(), viewportHeight());
   }
 
   // Fortress City: its center district gets the Industrial Hell tile
@@ -12773,17 +12994,22 @@ function render() {
   // decorations, units) renders on top of both, same as it would over open
   // ground - the only thing actually different about a river underneath is
   // that isMountain treats it as impassable outside of that bridge.
-  if (appState !== 'test') drawRivers();
+  if (appState !== 'test' && !activeCustomMapId) drawRivers();
 
   // Roads: same ground-layer tier as rivers (drawn early, purely cosmetic,
   // everything else renders on top) - see genBuildings' cityDense branch
   // for how these are generated (Urban Hell only, currently).
-  if (appState !== 'test') drawRoads();
+  if (appState !== 'test' && !activeCustomMapId) drawRoads();
 
   // Decorative military compounds sit directly on the ground texture and
   // above roads only in the sense of render order; generation guarantees they
   // never overlap the paved road strips. They have no gameplay interaction.
-  if (appState !== 'test') drawCompounds();
+  // All three (rivers, roads, compounds) are skipped entirely for a custom
+  // illustrated map - its roads/rivers/buildings are already part of the
+  // artwork itself, drawn as the single background image above, not
+  // generated from the (empty, for a custom map) procedural arrays these
+  // functions iterate.
+  if (appState !== 'test' && !activeCustomMapId) drawCompounds();
 
   // Permanent battle damage: draw the persistent world-sized damage canvas
   // as a single image, positioned/scaled by the current camera - this is
