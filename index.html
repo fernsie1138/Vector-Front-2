@@ -850,7 +850,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 183;
+const GAME_VERSION = 184;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -6071,6 +6071,16 @@ const ENGINEER_CLEAR_RADIUS = 36;
 // won't die from being merely nearby without the vehicle ever actually
 // approaching it.
 const ENGINEER_CLEAR_AMOUNT = 300;
+// Radius for the Engineer's own continuous ground-track reveal (see
+// updateTank's own engMoved block) - plain open ground has no HP/collision
+// data to destroy, so this is purely a visual "the ground here has been
+// driven over" mark, independent of ENGINEER_CLEAR_RADIUS above (which
+// only ever governs actual building/wall destruction). Sized close to the
+// vehicle's own collisionRadius (15) plus a small margin, wide enough that
+// consecutive frames' stamps (the vehicle moves roughly 1 world unit per
+// tick at its speed) overlap into one continuous, gap-free track rather
+// than a dotted line.
+const ENGINEER_GROUND_TRACK_RADIUS = 20;
 function resolveMountainCollision(t, oldX, oldY) {
   // Flying units are never bounced back by terrain - "nothing stops them" -
   // checked here, in the one function every movement call site already
@@ -6969,8 +6979,15 @@ function revealCustomMapDamageNear(worldX, worldY, worldRadius, intensity) {
   const ix = worldX / cfg.worldScale, iy = worldY / cfg.worldScale;
   const ir = Math.max(4, worldRadius / cfg.worldScale);
 
+  // A distinct, recognizable edge rather than a soft/feathered one: full
+  // opacity is held out to 85% of the radius, with only the remaining 15%
+  // used to fade to transparent - just enough of a band to avoid a raw
+  // pixel-hard cutoff (which would alias/jag at an angle), not a gradual
+  // bleed across the whole radius the way a 0-to-1 two-stop gradient gives.
+  const clampedIntensity = Math.max(0,Math.min(1,intensity));
   const grad = customMapRevealCtx.createRadialGradient(ix, iy, 0, ix, iy, ir);
-  grad.addColorStop(0, `rgba(255,255,255,${Math.max(0,Math.min(1,intensity))})`);
+  grad.addColorStop(0, `rgba(255,255,255,${clampedIntensity})`);
+  grad.addColorStop(0.85, `rgba(255,255,255,${clampedIntensity})`);
   grad.addColorStop(1, 'rgba(255,255,255,0)');
   customMapRevealCtx.fillStyle = grad;
   customMapRevealCtx.beginPath();
@@ -10633,6 +10650,24 @@ function updateTank(t, dt, now) {
   // world bounds clamp
   t.x = Math.max(30, Math.min(WORLD.w-30, t.x));
   t.y = Math.max(30, Math.min(WORLD.h-30, t.y));
+
+  // Engineering Vehicle (custom maps only): the ground itself turns to the
+  // damaged look everywhere it actually drives, not just where it destroys
+  // a building/wall cell - that destruction is handled separately, in
+  // resolveMountainCollision's own engineer branch, and only ever touches
+  // destructible cells. This is the companion piece for plain open ground,
+  // which has no HP/collision data to destroy at all - a continuous
+  // "track" of scorched/damaged ground follows wherever it travels,
+  // regardless of what's underneath. Gated on genuine per-frame
+  // displacement (the same movement check used just below for the Assault
+  // Tank and for setup-time resets), so it doesn't re-stamp the exact same
+  // spot every single frame while sitting still.
+  if (t.unitType === 'engineer' && activeCustomMapId) {
+    const engMoved = Math.hypot(t.x-startX, t.y-startY);
+    if (engMoved > 0.5) {
+      revealCustomMapDamageNear(t.x, t.y, ENGINEER_GROUND_TRACK_RADIUS, 1);
+    }
+  }
 
   // Assault Tank only: armor swaps between a moving bonus and a stationary
   // baseline depending on genuine per-frame displacement - the same
