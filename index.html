@@ -847,7 +847,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 177;
+const GAME_VERSION = 178;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -6715,8 +6715,75 @@ function updateCustomMapCraterFade(nowMs) {
   }
 }
 
+// Fast, terrain-cell-resolution approximation of "how damaged is the
+// ground around here" - mirrors the real reveal-mask canvas in direction
+// (monotonically rises toward 1 as more damage accumulates nearby) but is
+// deliberately NOT required to match it pixel-for-pixel, since its only
+// consumer is the stealth-concealment threshold check below, not
+// rendering. A plain array lookup there is far cheaper than reading
+// canvas pixel data for every stealth-eligible unit, every frame.
+let customMapDamageIntensity = null; // Float32Array(terrainCols*terrainRows), 0-1
+function bumpCustomMapDamageIntensity(worldX, worldY, radius, intensity) {
+  if (!customMapDamageIntensity) return;
+  // Grid cells are only ever sampled at their own center, so a stamp
+  // smaller than the grid spacing could otherwise land entirely between
+  // cell centers and bump nothing at all, even though it genuinely
+  // damaged the ground right there - the effective radius used for this
+  // grid walk (NOT the visual reveal radius passed to the caller's own
+  // canvas stamp, which is unaffected) is floored so the nearest cell(s)
+  // always get at least partial credit regardless of how small the
+  // original blast/hit radius was.
+  const bumpRadius = Math.max(radius, TERRAIN_CELL*0.75);
+  const minCol = Math.max(0, Math.floor((worldX-bumpRadius)/TERRAIN_CELL));
+  const maxCol = Math.min(terrainCols-1, Math.ceil((worldX+bumpRadius)/TERRAIN_CELL));
+  const minRow = Math.max(0, Math.floor((worldY-bumpRadius)/TERRAIN_CELL));
+  const maxRow = Math.min(terrainRows-1, Math.ceil((worldY+bumpRadius)/TERRAIN_CELL));
+  for (let row = minRow; row <= maxRow; row++) {
+    for (let col = minCol; col <= maxCol; col++) {
+      const cx = col*TERRAIN_CELL, cy = row*TERRAIN_CELL;
+      const d = Math.hypot(cx-worldX, cy-worldY);
+      if (d > bumpRadius) continue;
+      const idx = row*terrainCols + col;
+      const falloff = 1 - d/bumpRadius;
+      customMapDamageIntensity[idx] = Math.min(1, customMapDamageIntensity[idx] + intensity*falloff);
+    }
+  }
+}
+// "Infantry and Technicals" regaining the ability to go invisible on a
+// custom map, now that craters (the mechanism procedural maps use for
+// this) are disabled there - ground damaged enough to read as a real
+// crater/scar in the damaged artwork counts as cover too, checked at the
+// unit's own position against the approximate grid above. 0.4 is "damaged
+// enough to plausibly hide in", not "any damage at all" - a single grazing
+// hit shouldn't instantly turn open ground into concealment-grade cover.
+const CUSTOM_MAP_STEALTH_DAMAGE_THRESHOLD = 0.4;
+function isOnDamagedGroundForStealth(t) {
+  if (!activeCustomMapId || !customMapDamageIntensity) return false;
+  // Checks the max over the unit's own cell and its immediate neighbors,
+  // not just the single nearest cell - a unit's exact (continuous) world
+  // position is essentially never perfectly grid-aligned, and bumping
+  // only samples intensity AT each grid cell's own center, so the single
+  // nearest cell can land well off a nearby stamp's true peak (e.g. right
+  // at the midpoint between two cells) even when the unit is standing
+  // somewhere genuinely well-damaged. A small max-over-neighborhood check
+  // reflects "how damaged is the ground right here" far more reliably
+  // than trusting grid alignment to line up with it.
+  const col = Math.max(0, Math.min(terrainCols-1, Math.round(t.x/TERRAIN_CELL)));
+  const row = Math.max(0, Math.min(terrainRows-1, Math.round(t.y/TERRAIN_CELL)));
+  let best = 0;
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      const r = row+dr, c = col+dc;
+      if (r < 0 || r >= terrainRows || c < 0 || c >= terrainCols) continue;
+      best = Math.max(best, customMapDamageIntensity[r*terrainCols+c]);
+    }
+  }
+  return best >= CUSTOM_MAP_STEALTH_DAMAGE_THRESHOLD;
+}
+
 function revealCustomMapDamageNear(worldX, worldY, worldRadius, intensity) {
   if (!activeCustomMapId || !customMapRevealCtx) return;
+  bumpCustomMapDamageIntensity(worldX, worldY, worldRadius, intensity);
   const cfg = CUSTOM_MAPS[activeCustomMapId];
   const ix = worldX / cfg.worldScale, iy = worldY / cfg.worldScale;
   const ir = Math.max(4, worldRadius / cfg.worldScale);
@@ -6790,6 +6857,47 @@ function processCustomMapMask(mapId) {
       }
     }
   }
+
+  // Trees (the mask's green areas) are deliberately NOT a grid-cell solid
+  // flag the way water/buildings/walls above are - they're turned into
+  // actual discrete entries in the same `trees` array procedural maps
+  // populate, so every piece of existing tree behavior (resolveTreeCollisions
+  // physically blocking vehicles while letting Infantry/Scout/Flying units
+  // and Mech/LRM Mech through, Mech/LRM Mech crushing a tree on contact,
+  // spawnExplosion damaging/destroying any tree within a blast radius, even
+  // the normal drawTrees rendering) applies to these exactly as-is, with no
+  // changes needed to any of it - this file only needs to decide WHERE a
+  // tree goes, not how one behaves once it exists.
+  //
+  // Sampled on a square grid, not a point per mask pixel - spacing is just
+  // under 2x TREE_COLLISION_RADIUS (14) so neighboring sampled trees'
+  // collision circles always touch or overlap, forming a continuous
+  // barrier with no vehicle-sized gaps, rather than scattered individual
+  // trees with daylight between them the way a sparse procedural forest
+  // can have.
+  const TREE_SAMPLE_SPACING = 26; // just under 2x TREE_COLLISION_RADIUS (28) for a small overlap margin, without sampling needlessly denser than that - resolveTreeCollisions is O(trees x vehicles) every frame, so this map's ~1,800 trees at this spacing (vs. ~2,100 at a denser 24) is a meaningful, free performance win with no coverage cost.
+  let seed = 7919;
+  function rnd(){ seed = (seed*9301+49297)%233280; return seed/233280; }
+  for (let wy = TREE_SAMPLE_SPACING/2; wy < WORLD.h; wy += TREE_SAMPLE_SPACING) {
+    for (let wx = TREE_SAMPLE_SPACING/2; wx < WORLD.w; wx += TREE_SAMPLE_SPACING) {
+      const px = Math.round(wx / cfg.worldScale), py = Math.round(wy / cfg.worldScale);
+      const c = maskColorAt(px, py);
+      if (!c) continue;
+      if (!colorCloseEnough(c[0],c[1],c[2], CUSTOM_MAP_MASK_COLORS.trees)) continue;
+      trees.push({
+        id: nextId(), kind: 'tree', x: wx, y: wy,
+        hp: TREE_MAX_HP, maxHp: TREE_MAX_HP, alive: true,
+        radius: TREE_COLLISION_RADIUS,
+        visualScale: rnd()<0.08 ? (1.4+rnd()*0.35) : (0.8+rnd()*0.55),
+        rotation: rnd()*Math.PI*2,
+        destroyed: false,
+        spriteIndex: Math.floor(rnd()*TREE_SPRITES.length),
+        shapeVariant: rnd()<0.55 ? 'round' : 'pine',
+        hueShift: Math.floor((rnd()*2-1) * 16),
+        hasFlame: false, flameDuration: 0, flameBorn: 0, nextFlameSmokeAt: 0
+      });
+    }
+  }
 }
 // Applies `amount` damage to every destructible (building/wall) cell within
 // `radius` of (x,y) - called from resolveHit at every impact point, only
@@ -6850,6 +6958,7 @@ function loadCustomMap(mapId, onReady) {
   lakeSolid = new Uint8Array(terrainCols * terrainRows);
   crevasseSolid = new Uint8Array(terrainCols * terrainRows);
   riverSolid = new Uint8Array(terrainCols * terrainRows);
+  customMapDamageIntensity = new Float32Array(terrainCols * terrainRows);
   // The rest of what applyMapSize normally does for a new WORLD size, all
   // missed the first time around since loadCustomMap reimplemented just
   // the terrain-grid part of it directly rather than calling it: nav grid
@@ -11028,6 +11137,13 @@ function damageTree(tree, dmg) {
     tree.hp = 0;
     tree.destroyed = true;
     tree.alive = false; // no longer a physical obstacle once destroyed - see resolveTreeCollisions, which only pushes vehicles away from trees that are still alive
+    // A felled tree (Mech/LRM Mech crushing it, or an explosion's blast
+    // radius - both already route through here, this one hook covers
+    // both) is battle damage like any other on a custom map, so it reveals
+    // the damaged artwork at full intensity right at the stump, same as a
+    // building/wall cell finishing its own destruction. No-ops cleanly on
+    // a procedural map (activeCustomMapId null there).
+    if (activeCustomMapId) revealCustomMapDamageNear(tree.x, tree.y, TREE_COLLISION_RADIUS*2, 1);
     const hasFlame = Math.random() < FLAME_CHANCE;
     tree.hasFlame = hasFlame;
     if (hasFlame) {
@@ -11578,6 +11694,13 @@ function isTouchingTreeOrBuilding(t) {
   for (const c of craters) {
     if (Math.hypot(t.x-c.x, t.y-c.y) <= c.radius) return true;
   }
+  // Restores cover-based concealment on a custom map, where craters[]
+  // above is deliberately never populated (see spawnExplosion) and there
+  // are no procedural trees[]/buildings[] entities to begin with - ground
+  // damaged enough to read as a real scar in the artwork is this map's
+  // equivalent of a crater for concealment purposes. See
+  // isOnDamagedGroundForStealth's own comment for the threshold and why.
+  if (isOnDamagedGroundForStealth(t)) return true;
   return false;
 }
 function updateStealthConcealment(dt) {
@@ -12065,6 +12188,7 @@ function enterPlayMode(mapSize, biome, mechsCanCapture, neutralStartRed, customM
     customMapCompositeCanvas = null; customMapCompositeCtx = null;
     customMapRevealCanvas = null; customMapRevealCtx = null;
     customMapRevealEvents = [];
+    customMapDamageIntensity = null;
     generateNewMap(mapSize || 'medium', biome || 'desert');
     startPlayMode();
   }
