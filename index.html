@@ -847,7 +847,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 178;
+const GAME_VERSION = 179;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -3014,6 +3014,16 @@ const UNIT_STATS = {
 // Mortar, Mech, LRM Mech, and Siege Mortar.
 const SPLASH_DAMAGE_UNIT_TYPES = new Set(
   Object.keys(UNIT_STATS).filter(key => UNIT_STATS[key].blastRadius > 0)
+);
+// Every unit type with a minRange - the existing indicator for "arcing,
+// indirect-fire weapon that can't hit point-blank" (Mech has blastRadius
+// but no minRange, since its splash comes from a direct-fire weapon, not
+// an indirect one - the two sets are deliberately different). Currently
+// resolves to Artillery, Mortar, LRM Mech, Siege Mortar, Heavy Artillery,
+// and Technical Mortar - "artillery units and mortar units... fire
+// indirectly over the top of all obstacles, collision terrain, etc."
+const INDIRECT_FIRE_UNIT_TYPES = new Set(
+  Object.keys(UNIT_STATS).filter(key => UNIT_STATS[key].minRange > 0)
 );
 
 // ---------------------------------------------------------------------------
@@ -5925,6 +5935,34 @@ function lineBlockedBySight(x0,y0,x1,y1) {
     if (isMountainSolidAt(x,y)) return true;
   }
   return false;
+}
+// "Artillery units and mortar units do not need line of sight to fire.
+// They can fire indirectly over the top of all obstacles, collision
+// terrain, etc. They cannot fire over mountains however" - the firing-gate
+// version of lineBlockedBySight (used at the two withinWeaponReach/canFire
+// call sites in updateTank, never at the plain sight/auto-acquisition
+// check further up - an indirect-fire unit still can't auto-spot a target
+// it can't actually see, it just doesn't need to see a target the player
+// or an ally already pointed it at in order to hit it).
+//
+// On a custom illustrated map, mountainSolid is shared between true
+// mountain terrain and buildings/walls (see processCustomMapMask) - and
+// today's only custom map has no true mountain terrain in it at all,
+// meaning everything currently solid there IS a building or wall, which
+// indirect fire is explicitly meant to ignore. So for an indirect-fire
+// unit on a custom map, this check is skipped outright rather than
+// querying mountainSolid at all - there is nothing in that grid for a
+// custom map that SHOULD block indirect fire. On a procedural map,
+// mountainSolid is still purely true mountains (buildings there have no
+// collision of their own to begin with), so lineBlockedBySight already
+// means exactly "blocked by a real mountain" there, with nothing further
+// needed - this falls straight through to it unchanged. A future custom
+// map that introduces genuine mountain-like impassable terrain into its
+// own mask would need a dedicated flag to distinguish it from
+// buildings/walls here; none exists yet because none of today's maps need it.
+function lineBlockedForFiring(t, x0, y0, x1, y1) {
+  if (INDIRECT_FIRE_UNIT_TYPES.has(t.unitType) && activeCustomMapId) return false;
+  return lineBlockedBySight(x0, y0, x1, y1);
 }
 // Embankment: "blocks enemy fire but allows friendly fire to pass...
 // friendly units should sit behind an embankment and engage the enemy, all
@@ -10120,7 +10158,7 @@ function updateTank(t, dt, now) {
       // never back up to open the distance, so without this check it would
       // stand there aiming at point-blank range forever, unable to fire and
       // unable to pick up anything else.
-      const withinWeaponReach = d <= t.range && !lineBlockedBySight(t.x,t.y,t.attackTarget.x,t.attackTarget.y);
+      const withinWeaponReach = d <= t.range && !lineBlockedForFiring(t,t.x,t.y,t.attackTarget.x,t.attackTarget.y);
       const tooClose = (t.minRange || 0) > 0 && d < t.minRange;
       const targetUnreachable = (!t.canFireWhileMoving && !withinWeaponReach) || (!t.canFireWhileMoving && tooClose);
       if ((t.autoEngaged && !inSight) || targetUnreachable) {
@@ -10135,7 +10173,7 @@ function updateTank(t, dt, now) {
         // other unit type has no minRange field at all, so this defaults to 0
         // (no minimum) and never affects them.
         const minRange = t.minRange || 0;
-        const canFire = d <= t.range && d >= minRange && !lineBlockedBySight(t.x,t.y,t.attackTarget.x,t.attackTarget.y);
+        const canFire = d <= t.range && d >= minRange && !lineBlockedForFiring(t,t.x,t.y,t.attackTarget.x,t.attackTarget.y);
         // "If the blue team advance on them, the red team will set their
         // units to Defend." Tracks the distance to the current attack
         // target tick-to-tick, keyed by the target's own id so a freshly-
