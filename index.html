@@ -850,7 +850,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 182;
+const GAME_VERSION = 183;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -900,7 +900,7 @@ const BODY_ONLY_UNITS = ['artillery','infantry','mortar','blockhouse','foxhole',
 // move/aim direction like everything else, but the two static deployables
 // never turn once placed) so the offset is harmless even though it's rarely
 // visually relevant for them.
-const SPRITE_FACING_UP = new Set(['tank','scout','autotank','assaulttank','turret','artillery','infantry','mortar','blockhouse','foxhole','mech','apc','lrmmech','atinfantry','sappers','siegemortar','barricade','watchtower','heavyartillery','embankment','technicalmg','technicalat','technicalmortar','hkunit']);
+const SPRITE_FACING_UP = new Set(['tank','scout','autotank','assaulttank','turret','artillery','infantry','mortar','blockhouse','foxhole','mech','apc','engineer','lrmmech','atinfantry','sappers','siegemortar','barricade','watchtower','heavyartillery','embankment','technicalmg','technicalat','technicalmortar','hkunit']);
 const SPRITE_ROTATION_OFFSET = Math.PI/2;
 
 // Loaded lazily via the Image() constructor - drawTank checks spritesReady
@@ -6060,8 +6060,17 @@ function resolveEmbankmentRedirect(x0, y0, target, shooterTeam) {
 // a destructible cell - a bit more than its own collision radius (15) so it
 // actually fits through the gap it just made rather than immediately
 // re-colliding with an uncleared neighboring cell, without clearing a much
-// wider area than the vehicle itself needs.
-const ENGINEER_CLEAR_RADIUS = 24;
+// wider area than the vehicle itself needs. 36 (50% over the original 24).
+const ENGINEER_CLEAR_RADIUS = 36;
+// The amount passed to the Engineer's own (falloff-enabled) clearing call -
+// see damageCustomMapCellsNear. Chosen so a cell within roughly 60% of
+// ENGINEER_CLEAR_RADIUS (comfortably covering the vehicle's own real-world
+// footprint as it travels, giving it genuine "width") still dies in a
+// single hit even against the tougher wall HP (120), while a cell out
+// near the radius's own edge gets only a small fraction of that and
+// won't die from being merely nearby without the vehicle ever actually
+// approaching it.
+const ENGINEER_CLEAR_AMOUNT = 300;
 function resolveMountainCollision(t, oldX, oldY) {
   // Flying units are never bounced back by terrain - "nothing stops them" -
   // checked here, in the one function every movement call site already
@@ -6093,11 +6102,16 @@ function resolveMountainCollision(t, oldX, oldY) {
     // mountains" holds on both map types, just for different reasons.
     if (isMountainSolidAt(t.x,t.y)) {
       if (activeCustomMapId) {
-        // Wider-radius clear for a path with some real width - same
-        // falloff-based mechanism weapon damage already uses, so it isn't
-        // guaranteed to fully clear every cell it touches in one hit (a
-        // cell near the radius's own edge gets very little of it).
-        damageCustomMapCellsNear(t.x, t.y, ENGINEER_CLEAR_RADIUS, 999);
+        // Wider-radius clear for a path with some real width - falloff-
+        // enabled (unlike the weapon-damage callers of this same function,
+        // which intentionally apply full force flatly across an
+        // explosion's blast radius), so it isn't guaranteed to fully clear
+        // every cell within the radius in one hit - a cell near the
+        // radius's own edge gets very little of it, and only actually
+        // dies once the vehicle has traveled close enough to it for real,
+        // rather than merely having passed somewhere within a wide circle
+        // of it once.
+        damageCustomMapCellsNear(t.x, t.y, ENGINEER_CLEAR_RADIUS, ENGINEER_CLEAR_AMOUNT, true);
         // The exact cell the Engineer is actually blocked by, though, has
         // to be guaranteed cleared on first contact regardless of where
         // within it the Engineer happens to be - falloff alone can't
@@ -7086,7 +7100,26 @@ function processCustomMapMask(mapId) {
 // change - see gameLoop. Cells with 0 HP to begin with (water, trees, open
 // ground - never populated above) are skipped entirely, so this never
 // touches anything but actual building/wall cells.
-function damageCustomMapCellsNear(x, y, radius, amount) {
+//
+// `falloff` (default false) scales `amount` down the further a cell's
+// center sits from (x,y), reaching ~0 at the radius's own edge, rather
+// than applying the full amount flatly to every cell within radius
+// (which is the correct, intentional behavior for an explosion's blast
+// radius - full force everywhere inside it - and stays the default for
+// every weapon-damage caller below). The Engineer's own call is the one
+// exception that opts in: without falloff, a single moment of contact
+// anywhere within its wide clearing radius instantly fully destroys
+// EVERY destructible cell in that radius regardless of how far from the
+// vehicle's own position each one actually is - as it continues
+// traveling along (not just through) a long wall or building, that
+// radius keeps getting re-stamped at each new position, and the union of
+// all those full-radius, full-amount hits can consume an entire
+// connected structure far beyond anything the vehicle's own footprint
+// ever touched. With falloff on, only a cell genuinely close to the
+// vehicle's own position dies in one hit; a cell merely within the wider
+// radius but not something the vehicle actually travels near only takes
+// partial, likely non-lethal damage.
+function damageCustomMapCellsNear(x, y, radius, amount, falloff) {
   if (!customMapCellHp || !activeCustomMapId || amount <= 0) return;
   const minCol = Math.max(0, Math.floor((x-radius)/TERRAIN_CELL));
   const maxCol = Math.min(terrainCols-1, Math.ceil((x+radius)/TERRAIN_CELL));
@@ -7097,8 +7130,11 @@ function damageCustomMapCellsNear(x, y, radius, amount) {
       const idx = row*terrainCols + col;
       if (customMapCellHp[idx] <= 0) continue;
       const cx = col*TERRAIN_CELL, cy = row*TERRAIN_CELL;
-      if (Math.hypot(cx-x, cy-y) > radius) continue;
-      const newHp = Math.max(0, customMapCellHp[idx] - amount);
+      const d = Math.hypot(cx-x, cy-y);
+      if (d > radius) continue;
+      const appliedAmount = falloff ? amount * Math.max(0, 1 - d/radius) : amount;
+      if (appliedAmount <= 0) continue;
+      const newHp = Math.max(0, customMapCellHp[idx] - appliedAmount);
       customMapCellHp[idx] = newHp;
       if (newHp === 0 && mountainSolid[idx] === 1) {
         mountainSolid[idx] = 0;
