@@ -581,6 +581,7 @@
     <div class="optionRow">
       <button class="optionBtn" id="optCustomMapOff" data-group="customMap" data-value="off">OFF (PROCEDURAL)</button>
       <button class="optionBtn" id="optCustomMapCompound01" data-group="customMap" data-value="compound01">WALLED COMPOUND</button>
+      <button class="optionBtn" id="optCustomMapParadiseCity" data-group="customMap" data-value="paradise_city">PARADISE CITY</button>
     </div>
   </div>
   <div class="optionGroup">
@@ -847,7 +848,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 179;
+const GAME_VERSION = 180;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -952,6 +953,44 @@ const CUSTOM_MAPS = {
     // base compounds, rather than scaling the image to any particular
     // WORLD size.
     worldScale: 2.5,
+    // This mask was authored to this exact spec (see CUSTOM_MAP_MASK_COLORS'
+    // own values), so no per-map override is needed - maskColors/tolerance
+    // fall back to those shared defaults for this map, set below.
+    // No baseWorldPositions override either - compound01's generic opposite-
+    // corners-with-margin placement (see loadCustomMap) already lands on
+    // open ground well clear of the compound in the middle, since this map
+    // has no water anywhere near either corner.
+  },
+  paradise_city: {
+    label: 'Paradise City',
+    undamagedSrc: 'assets/terrain/custom_maps/paradise_city/undamaged.png',
+    damagedSrc: 'assets/terrain/custom_maps/paradise_city/damaged.png',
+    maskSrc: 'assets/terrain/custom_maps/paradise_city/collision_mask.png',
+    worldScale: 2.5,
+    // This mask was authored independently of compound01's, with its own
+    // exact RGB values for each category (sampled directly from the file:
+    // water averages (4,129,211), buildings (230,20,25), with no wall
+    // category at all - this map doesn't use one) - different enough from
+    // CUSTOM_MAP_MASK_COLORS' own values, particularly on green/tree (much
+    // lower average brightness here, and far more varied - likely several
+    // slightly different tree-marker shades blended by anti-aliasing) and
+    // blue/water (notably brighter), that matching against the shared
+    // defaults' tolerance would miss real pixels of both. tolerance is
+    // also wider than the shared 40 specifically because of that same
+    // tree-color spread.
+    maskColors: { water: [4,129,211], trees: [40,171,49], building: [230,20,25], wall: [-999,-999,-999] },
+    maskColorTolerance: 55,
+    // This map is dense city blocks laced with water channels reaching
+    // every corner (roughly 30% water within 300px of each one) - the
+    // generic opposite-corners-with-margin placement loadCustomMap uses
+    // for compound01 would frequently land a base in open water here, so
+    // both corners were instead picked by directly scanning the mask for
+    // the largest water-free clearance near each one, then taking the
+    // pair of diagonal corners (top-right/bottom-left) with the greater
+    // distance between them - top-left/bottom-right's own best clearances
+    // sit meaningfully closer together. World coordinates = the chosen
+    // source-image pixel position x worldScale above.
+    baseWorldPositions: { blue: {x: 2910, y: 525}, red: {x: 1100, y: 2635} },
   },
 };
 const customMapImages = {}; // e.g. customMapImages.compound01.undamaged -> HTMLImageElement
@@ -6864,6 +6903,17 @@ function revealCustomMapDamageNear(worldX, worldY, worldRadius, intensity) {
 
 function processCustomMapMask(mapId) {
   const cfg = CUSTOM_MAPS[mapId];
+  // Each map's own mask was very likely authored independently (different
+  // tool, different pass, sometimes a different person), so its exact flat
+  // colors for water/trees/buildings/wall and how much per-pixel variance
+  // they carry are never safe to assume match another map's - see
+  // paradise_city's own config comment for a real example of how far off
+  // compound01's defaults actually were for it. Every map falls back to
+  // CUSTOM_MAP_MASK_COLORS/40 when it doesn't specify its own override, so
+  // this costs nothing for a map whose mask genuinely was authored to that
+  // exact spec (compound01).
+  const maskColors = cfg.maskColors || CUSTOM_MAP_MASK_COLORS;
+  const maskTolerance = cfg.maskColorTolerance || 40;
   const maskImg = customMapImages[mapId].mask;
   const off = document.createElement('canvas');
   off.width = maskImg.naturalWidth;
@@ -6884,12 +6934,12 @@ function processCustomMapMask(mapId) {
       const c = maskColorAt(px, py);
       if (!c) continue;
       const idx = row*terrainCols + col;
-      if (colorCloseEnough(c[0],c[1],c[2], CUSTOM_MAP_MASK_COLORS.water)) {
+      if (colorCloseEnough(c[0],c[1],c[2], maskColors.water, maskTolerance)) {
         lakeSolid[idx] = 1;
-      } else if (colorCloseEnough(c[0],c[1],c[2], CUSTOM_MAP_MASK_COLORS.wall)) {
+      } else if (colorCloseEnough(c[0],c[1],c[2], maskColors.wall, maskTolerance)) {
         mountainSolid[idx] = 1;
         customMapCellHp[idx] = CUSTOM_MAP_CELL_HP.wall;
-      } else if (colorCloseEnough(c[0],c[1],c[2], CUSTOM_MAP_MASK_COLORS.building)) {
+      } else if (colorCloseEnough(c[0],c[1],c[2], maskColors.building, maskTolerance)) {
         mountainSolid[idx] = 1;
         customMapCellHp[idx] = CUSTOM_MAP_CELL_HP.building;
       }
@@ -6921,7 +6971,7 @@ function processCustomMapMask(mapId) {
       const px = Math.round(wx / cfg.worldScale), py = Math.round(wy / cfg.worldScale);
       const c = maskColorAt(px, py);
       if (!c) continue;
-      if (!colorCloseEnough(c[0],c[1],c[2], CUSTOM_MAP_MASK_COLORS.trees)) continue;
+      if (!colorCloseEnough(c[0],c[1],c[2], maskColors.trees, maskTolerance)) continue;
       trees.push({
         id: nextId(), kind: 'tree', x: wx, y: wy,
         hp: TREE_MAX_HP, maxHp: TREE_MAX_HP, alive: true,
@@ -7018,15 +7068,32 @@ function loadCustomMap(mapId, onReady) {
   damageCanvas.width = WORLD.w;
   damageCanvas.height = WORLD.h;
   testAreaCenter.x = WORLD.w/2; testAreaCenter.y = WORLD.h/2;
-  // Base corners: opposite corners of the map, same 260px-equivalent
-  // margin convention applyMapSize uses, so both teams start well clear of
-  // the central compound regardless of its exact footprint. Clamped to a
-  // fraction of the map's own size (not just the fixed 260) so a smaller
-  // custom map can never push a base to a negative/off-map coordinate the
-  // way an unclamped margin could.
-  const margin = Math.max(40, Math.min(260, Math.min(WORLD.w, WORLD.h) * 0.15));
-  blueBaseStart.x = margin; blueBaseStart.y = margin;
-  redBaseStart.x = WORLD.w - margin; redBaseStart.y = WORLD.h - margin;
+  // Base corners: cfg.baseWorldPositions, if this map's own config sets it,
+  // is hand-picked exact placement - see paradise_city's own config comment
+  // for why that was necessary there (a generic opposite-corners formula
+  // frequently lands in open water on a map with water reaching every
+  // corner). Without an override, falls back to the same generic opposite-
+  // corners-with-margin convention applyMapSize uses on a procedural map,
+  // which is safe for a map whose corners are genuinely clear (compound01).
+  // That margin is clamped to a fraction of the map's own size (not just
+  // the fixed 260) so a smaller custom map can never push a base to a
+  // negative/off-map coordinate the way an unclamped margin could.
+  if (cfg.baseWorldPositions) {
+    // Clamped the same defensive way the generic margin formula below
+    // already is - these are fixed numbers authored against this map's
+    // own known source-image dimensions, so they're correct today, but
+    // nothing stops that assumption from going stale (an edited source
+    // image, a changed worldScale) the same way an unclamped margin could
+    // go stale on a resized map.
+    blueBaseStart.x = Math.max(0, Math.min(WORLD.w, cfg.baseWorldPositions.blue.x));
+    blueBaseStart.y = Math.max(0, Math.min(WORLD.h, cfg.baseWorldPositions.blue.y));
+    redBaseStart.x = Math.max(0, Math.min(WORLD.w, cfg.baseWorldPositions.red.x));
+    redBaseStart.y = Math.max(0, Math.min(WORLD.h, cfg.baseWorldPositions.red.y));
+  } else {
+    const margin = Math.max(40, Math.min(260, Math.min(WORLD.w, WORLD.h) * 0.15));
+    blueBaseStart.x = margin; blueBaseStart.y = margin;
+    redBaseStart.x = WORLD.w - margin; redBaseStart.y = WORLD.h - margin;
+  }
   // blueBase/redBase are the same two persistent objects for the whole
   // page session and are only ever pushed into entities once - clearing
   // the array without restoring them here would leave both bases
