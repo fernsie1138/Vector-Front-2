@@ -850,7 +850,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 185;
+const GAME_VERSION = 186;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -7112,8 +7112,44 @@ function maybePlaceCustomMapRubble(worldX, worldY) {
   const targetSpan = (TERRAIN_CELL * 1.4) / cfg.worldScale;
   const scale = targetSpan / Math.max(img.naturalWidth, img.naturalHeight);
   const dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
-  customMapDecorCtx.drawImage(img, ix - dw/2, iy - dh/2, dw, dh);
+  // Random rotation so repeated piles of the same icon (only 10 to draw
+  // from) don't visibly read as stamped copies of each other.
+  customMapDecorCtx.save();
+  customMapDecorCtx.translate(ix, iy);
+  customMapDecorCtx.rotate(Math.random()*Math.PI*2);
+  customMapDecorCtx.drawImage(img, -dw/2, -dh/2, dw, dh);
+  customMapDecorCtx.restore();
 }
+
+// Reuses the same 6 crater sprite variants procedural maps' own
+// paintTerrainDamage already draws from (see CRATER_SPRITE_DATA_URIS) -
+// baked permanently onto customMapDecorCtx (never customMapCompositeCtx -
+// see that canvas's own comment), at a small, fixed 20-50 image-space-px
+// diameter rather than scaled to the explosion's actual blast radius the
+// way the procedural version is, since this is meant to read as a modest
+// pockmark accent, not a dominant feature.
+function paintCustomMapCrater(worldX, worldY) {
+  if (!activeCustomMapId || !customMapDecorCtx) return;
+  const key = CRATER_SPRITE_KEYS[Math.floor(Math.random()*CRATER_SPRITE_KEYS.length)];
+  if (!craterSpriteReady[key]) return;
+  const img = craterSprites[key];
+  const cfg = CUSTOM_MAPS[activeCustomMapId];
+  const ix = worldX / cfg.worldScale, iy = worldY / cfg.worldScale;
+  const aspect = img.naturalWidth / img.naturalHeight;
+  const diameter = 20 + Math.random()*30; // 20-50 image-space px, per spec
+  const w = aspect >= 1 ? diameter : diameter*aspect;
+  const h = aspect >= 1 ? diameter/aspect : diameter;
+  customMapDecorCtx.save();
+  customMapDecorCtx.translate(ix, iy);
+  customMapDecorCtx.rotate(Math.random()*Math.PI*2);
+  customMapDecorCtx.drawImage(img, -w/2, -h/2, w, h);
+  customMapDecorCtx.restore();
+}
+// Shared probability for both crater hook points below - independent of,
+// and separate from, CUSTOM_MAP_RUBBLE_CHANCE (a building/wall destruction
+// can roll a rubble pile, a crater, both, or neither, each decided on its
+// own).
+const CUSTOM_MAP_CRATER_CHANCE = 0.2;
 
 // Single shared point for "a destructible building/wall cell has just
 // reached 0 HP" - both damageCustomMapCellsNear (weapon splash/direct
@@ -7129,6 +7165,10 @@ function destroyCustomMapCell(idx, col, row) {
   const cx = col*TERRAIN_CELL, cy = row*TERRAIN_CELL;
   revealCustomMapDamageNear(cx, cy, TERRAIN_CELL*0.75, 1);
   maybePlaceCustomMapRubble(cx, cy);
+  // Independent roll, on top of (drawn after, so visually layered over)
+  // whatever rubble just got placed above - a separate decision each time,
+  // not tied to whether the rubble roll itself hit.
+  if (Math.random() < CUSTOM_MAP_CRATER_CHANCE) paintCustomMapCrater(cx, cy);
 }
 
 function processCustomMapMask(mapId) {
@@ -10949,6 +10989,19 @@ function resolveHit(p) {
       }
     });
     spawnExplosion(impactX, impactY, p.blastRadius, p.dmg);
+    // Independent crater roll for a splash hit landing somewhere that
+    // ISN'T a building/wall cell - open ground, a road, or a tree (trees
+    // are separate entities, never part of mountainSolid, so this single
+    // check already covers all three the same way). Captured BEFORE
+    // damageCustomMapCellsNear below, which could otherwise destroy a
+    // building/wall cell at this exact point and make it indistinguishable
+    // from open ground afterward - a hit that actually breaks a building
+    // gets its own crater roll separately, in destroyCustomMapCell, "on
+    // top of" that destruction's rubble, so this check is specifically for
+    // hits that never touched one at all.
+    if (activeCustomMapId && !isMountainSolidAt(impactX, impactY) && Math.random() < CUSTOM_MAP_CRATER_CHANCE) {
+      paintCustomMapCrater(impactX, impactY);
+    }
     // Splash naturally has its own blast radius already - a custom map's
     // building/wall cells within that same radius take the same damage
     // the blast dealt to units there.
