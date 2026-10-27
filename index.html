@@ -191,7 +191,28 @@
      only; optionsScreen has no artwork to blend with and keeps its own
      gradient unchanged. */
   #launchScreen { background: #bdb4a8; }
-  #optionsScreen { display: none; }
+  /* This screen's option groups have grown considerably since the original
+     "always centers, always fits one screen" design (see the comment on
+     #instructionsScreen/#unitOptionsScreen, which already needed the
+     opposite, genuinely-scrollable treatment for the same reason) - Map
+     Size, Custom Map, Biome, both supply toggles, and Starting Supply can
+     now run tall enough on a shorter viewport that justify-content:center
+     alone clips the bottom-most groups with no way to reach them.
+     overflow-y:auto (plus -webkit-overflow-scrolling:touch for a smooth
+     drag on iPad Safari specifically) lets it scroll when that happens;
+     justify-content switches from center to flex-start so an overflowing
+     column scrolls from a reachable top edge rather than centering
+     content around an invisible midpoint that pushes the excess off both
+     ends. The top/bottom padding keeps it from looking cramped against the
+     viewport edge on a tall viewport where it still fits entirely. */
+  #optionsScreen {
+    display: none;
+    justify-content: flex-start;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 30px 0;
+    box-sizing: border-box;
+  }
 
   /* The supplied title artwork is displayed pixel-for-pixel as an image.
      Only the four transparent hit areas are layered over it. */
@@ -850,7 +871,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 186;
+const GAME_VERSION = 187;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -2890,7 +2911,7 @@ const UNIT_STATS = {
     blastRadius: 0, setupTime: 0, canFireWhileMoving: true, collisionRadius: 15
   },
   // Engineering Vehicle: identical to APC in every field below except
-  // speed (47.5 -> 10, much slower - it's a combat engineer clearing a
+  // speed (47.5 -> 15, much slower - it's a combat engineer clearing a
   // path, not a fast transport). Its three behavioral differences from
   // APC (no passenger deploy, no permanent lock on Defend, terrain/tree/
   // building-destroying movement) are NOT stat fields here at all - see
@@ -2900,7 +2921,7 @@ const UNIT_STATS = {
   // branch (building/wall destruction, mountain/water still impassable).
   engineer: {
     cost: 50, hp: 90, armor: 8, damage: 6, fireCooldown: 0.33,
-    range: 100, sight: 240, react: 456, speed: 10, shellSpeed: 1500,
+    range: 100, sight: 240, react: 456, speed: 15, shellSpeed: 1500,
     blastRadius: 0, setupTime: 0, canFireWhileMoving: true, collisionRadius: 15
   },
   // LRM Mech: same chassis/role as Mech (large, slow, heavily armoured), but
@@ -8042,6 +8063,7 @@ function startTestMode() {
   impactFlashes = [];
   muzzleFlashes = [];
   lingeringSmoke = [];
+  vehicleDust = [];
   wrecks = [];
   flameSmoke = [];
   burningDebris = [];
@@ -10828,6 +10850,15 @@ function updateTank(t, dt, now) {
     }
   }
 
+  // Small trailing dust clouds for any moving non-infantry unit (see
+  // maybeSpawnVehicleDust's own comment) - every map, not just custom
+  // ones, since this is a generic movement effect unrelated to the
+  // custom-map damage-reveal system just above it.
+  {
+    const vehMoved = Math.hypot(t.x-startX, t.y-startY);
+    if (vehMoved > 0.3) maybeSpawnVehicleDust(t, now);
+  }
+
   // Assault Tank only: armor swaps between a moving bonus and a stationary
   // baseline depending on genuine per-frame displacement - the same
   // start/end position comparison used just below for setup-time resets, so
@@ -11054,6 +11085,42 @@ const DIRECT_HIT_CELL_RADIUS = TERRAIN_CELL * 0.75;
 // prunes them once expired.
 let lingeringSmoke = []; // smoke puffs that persist for a few seconds after an explosion, independent of the explosion's own short shockwave/debris lifetime
 
+// Small dust clouds trailing behind any moving non-infantry unit (see
+// INFANTRY_CLASS_TYPES - everything else, from a Scout to a Mech to an
+// Engineer, counts as a "vehicle" for this purpose; a walking Mech still
+// kicks up dust the way a tracked or wheeled unit does, and a stationary
+// deployed structure like a Turret or Blockhouse never triggers this at
+// all simply because it never moves). Spawned from updateTank's own
+// per-frame movement check (see maybeSpawnVehicleDust below) rather than
+// stored per-unit state beyond a lazily-initialized `nextDustAt` cooldown
+// timestamp on the tank object itself - this array only holds the
+// short-lived visual puffs themselves, pruned in updateExplosions
+// alongside the other particle systems.
+let vehicleDust = [];
+const VEHICLE_DUST_INTERVAL_MS = 180; // cadence while actively moving - frequent enough for a visible trail, not a solid cloud
+function maybeSpawnVehicleDust(t, now) {
+  if (INFANTRY_CLASS_TYPES.has(t.unitType)) return;
+  if (t.nextDustAt === undefined) t.nextDustAt = 0;
+  if (now < t.nextDustAt) return;
+  t.nextDustAt = now + VEHICLE_DUST_INTERVAL_MS + Math.random()*80;
+  // Placed slightly behind the unit's own facing direction (t.angle, the
+  // same heading the sprite itself is drawn with) rather than dead-center
+  // under it, so it reads as a trailing cloud kicked up from the rear
+  // rather than appearing to emanate from directly beneath the hull.
+  const behindAng = (t.angle || 0) + Math.PI;
+  const trailDist = (t.radius || 12) * 0.7;
+  const px = t.x + Math.cos(behindAng)*trailDist + (Math.random()*2-1)*4;
+  const py = t.y + Math.sin(behindAng)*trailDist + (Math.random()*2-1)*4;
+  vehicleDust.push({
+    x: px, y: py,
+    driftX: Math.cos(behindAng)*4 + (Math.random()*2-1)*3,
+    driftY: Math.sin(behindAng)*4 + (Math.random()*2-1)*3,
+    startRadius: 4 + Math.random()*3,
+    born: now,
+    duration: 550 + Math.random()*300 // brief - a trailing wisp, not lingering smoke
+  });
+}
+
 function spawnExplosion(x, y, radius, treeDamage) {
   // "Don't put craters in rivers. Let the rounds land but don't put a
   // crater icon." A round can still land and detonate on a river tile
@@ -11190,11 +11257,17 @@ function spawnExplosion(x, y, radius, treeDamage) {
   for (let i=0;i<puffCount;i++) {
     const ang = Math.random()*Math.PI*2;
     const dist = Math.random()*radius*0.6;
+    // Drift follows each puff's own placement angle outward from the
+    // impact point, rather than an independent random direction - every
+    // puff keeps moving further away from where the blast actually hit
+    // instead of potentially drifting back across it or off sideways,
+    // plus a slight upward bias on top, like rising smoke.
+    const driftSpeed = 3 + Math.random()*6;
     lingeringSmoke.push({
       x: x + Math.cos(ang)*dist,
       y: y + Math.sin(ang)*dist,
-      driftX: (Math.random()*2-1) * 8,
-      driftY: (Math.random()*2-1) * 8 - 4, // slight upward bias, like rising smoke
+      driftX: Math.cos(ang) * driftSpeed,
+      driftY: Math.sin(ang) * driftSpeed - 3,
       startRadius: radius * (0.35 + Math.random()*0.25),
       born: now,
       duration: 3000 + Math.random()*1500 // a few seconds, staggered per puff
@@ -11205,6 +11278,7 @@ function updateExplosions() {
   const now = performance.now();
   explosions = explosions.filter(ex => now - ex.born < ex.duration);
   lingeringSmoke = lingeringSmoke.filter(p => now - p.born < p.duration);
+  vehicleDust = vehicleDust.filter(p => now - p.born < p.duration);
 }
 
 // ---------------------------------------------------------------------------
@@ -12692,6 +12766,7 @@ function returnToLaunchScreen() {
   impactFlashes = [];
   muzzleFlashes = [];
   lingeringSmoke = [];
+  vehicleDust = [];
   wrecks = [];
   flameSmoke = [];
   burningDebris = [];
@@ -12752,7 +12827,7 @@ const UNIT_DESCRIPTIONS = {
   mech: { label: 'Mech', text: 'A large, heavily armored walker with a powerful splash-damage weapon that can fire while moving. Slow, but hard to kill and dangerous to any cluster of enemies.' },
   assaulttank: { label: 'Assault Tank', text: 'A fast, lightly-armored vehicle that gains extra armor while moving, making it well suited to closing distance quickly against stationary targets like Artillery or a deployed Turret.' },
   apc: { label: 'APC', text: 'A lightly-armed transport. Order it to Defend to permanently plant it and release a free Infantry passenger.' },
-  engineer: { label: 'Engineer', text: 'A combat engineer vehicle, built on the APC chassis - same armament, but slow (speed 10) and built to clear a path rather than transport troops: it never deploys a passenger and never locks permanently in place on Defend. Anything solid in its way - trees, buildings, walls - is destroyed on contact as it drives through, revealing the damaged map beneath. Mountains and water still stop it completely; it cannot clear or cross either.' },
+  engineer: { label: 'Engineer', text: 'A combat engineer vehicle, built on the APC chassis - same armament, but slow (speed 15) and built to clear a path rather than transport troops: it never deploys a passenger and never locks permanently in place on Defend. Anything solid in its way - trees, buildings, walls - is destroyed on contact as it drives through, revealing the damaged map beneath. Mountains and water still stop it completely; it cannot clear or cross either.' },
   lrmmech: { label: 'LRM Mech', text: 'A large walker armed with a long-range rocket salvo instead of a single weapon, firing several rockets at once that can scatter across a cluster of targets. Very expensive, but hits harder than anything else at range.' },
   siegemortar: { label: 'Siege Mortar', text: 'A Blockhouse with an attached mortar - the same long-range splash weapon as Mortar, carried on a far tougher chassis. Cannot fire until deployed, and cannot move once deployed.' },
   atinfantry: { label: 'AT Infantry', text: 'Anti-tank infantry armed with a slow-firing but hard-hitting weapon and a longer reach than regular Infantry. Shares Infantry\'s concealment near trees, buildings, and foxholes, but cannot build.' },
@@ -13272,6 +13347,7 @@ function applyLoadedGame(data) {
   projectiles = [];
   explosions = [];
   lingeringSmoke = [];
+  vehicleDust = [];
   flameSmoke = [];
   burningDebris = [];
   markers = [];
@@ -14019,7 +14095,27 @@ function render() {
     const r = (p.startRadius + elapsedSec*6) * camera.zoom;
     const alpha = Math.max(0, (1-age)*0.22);
     if (alpha <= 0) return;
-    ctx.fillStyle = `rgba(95,90,85,${alpha})`;
+    ctx.fillStyle = `rgba(168,163,156,${alpha})`;
+    ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI*2); ctx.fill();
+  });
+
+  // Vehicle dust trail: small, quick-fading puffs kicked up behind any
+  // moving non-infantry unit (see maybeSpawnVehicleDust) - a sandy/tan
+  // tone rather than smoke's grey, and drawn under units same as
+  // lingering smoke just above, so the unit itself always reads clearly
+  // over its own trail.
+  vehicleDust.forEach(p=>{
+    if (!isVisible(p.x, p.y)) return;
+    const age = (performance.now() - p.born) / p.duration;
+    if (age >= 1) return;
+    const elapsedSec = age * p.duration / 1000;
+    const px = p.x + p.driftX*elapsedSec;
+    const py = p.y + p.driftY*elapsedSec;
+    const s = worldToScreen(px, py);
+    const r = (p.startRadius + elapsedSec*5) * camera.zoom;
+    const alpha = Math.max(0, (1-age)*0.3);
+    if (alpha <= 0) return;
+    ctx.fillStyle = `rgba(196,176,142,${alpha})`;
     ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI*2); ctx.fill();
   });
 
@@ -14192,7 +14288,7 @@ function render() {
     // what actually keeps the site smoking for a few seconds afterward.
     const smokeAlpha = Math.max(0, (1-age)*0.5);
     if (smokeAlpha > 0) {
-      ctx.fillStyle = `rgba(90,82,76,${smokeAlpha})`;
+      ctx.fillStyle = `rgba(168,163,156,${smokeAlpha})`;
       ctx.beginPath(); ctx.arc(s.x, s.y, maxR*0.9*(0.6+age*0.6), 0, Math.PI*2); ctx.fill();
     }
 
