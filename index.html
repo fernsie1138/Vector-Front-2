@@ -871,7 +871,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 187;
+const GAME_VERSION = 188;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -7145,9 +7145,9 @@ function maybePlaceCustomMapRubble(worldX, worldY) {
 // Reuses the same 6 crater sprite variants procedural maps' own
 // paintTerrainDamage already draws from (see CRATER_SPRITE_DATA_URIS) -
 // baked permanently onto customMapDecorCtx (never customMapCompositeCtx -
-// see that canvas's own comment), at a small, fixed 20-50 image-space-px
+// see that canvas's own comment), at a small, fixed 10-20 image-space-px
 // diameter rather than scaled to the explosion's actual blast radius the
-// way the procedural version is, since this is meant to read as a modest
+// way the procedural version is, since this is meant to read as a subtle
 // pockmark accent, not a dominant feature.
 function paintCustomMapCrater(worldX, worldY) {
   if (!activeCustomMapId || !customMapDecorCtx) return;
@@ -7157,7 +7157,7 @@ function paintCustomMapCrater(worldX, worldY) {
   const cfg = CUSTOM_MAPS[activeCustomMapId];
   const ix = worldX / cfg.worldScale, iy = worldY / cfg.worldScale;
   const aspect = img.naturalWidth / img.naturalHeight;
-  const diameter = 20 + Math.random()*30; // 20-50 image-space px, per spec
+  const diameter = 10 + Math.random()*10; // 10-20 image-space px, per spec
   const w = aspect >= 1 ? diameter : diameter*aspect;
   const h = aspect >= 1 ? diameter/aspect : diameter;
   customMapDecorCtx.save();
@@ -7170,7 +7170,7 @@ function paintCustomMapCrater(worldX, worldY) {
 // and separate from, CUSTOM_MAP_RUBBLE_CHANCE (a building/wall destruction
 // can roll a rubble pile, a crater, both, or neither, each decided on its
 // own).
-const CUSTOM_MAP_CRATER_CHANCE = 0.2;
+const CUSTOM_MAP_CRATER_CHANCE = 0.05;
 
 // Single shared point for "a destructible building/wall cell has just
 // reached 0 HP" - both damageCustomMapCellsNear (weapon splash/direct
