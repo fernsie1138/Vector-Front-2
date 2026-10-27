@@ -850,7 +850,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 184;
+const GAME_VERSION = 185;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -6135,10 +6135,7 @@ function resolveMountainCollision(t, oldX, oldY) {
         const row = Math.max(0, Math.min(terrainRows-1, Math.round(t.y/TERRAIN_CELL)));
         const idx = row*terrainCols + col;
         if (mountainSolid[idx] === 1) {
-          mountainSolid[idx] = 0;
-          if (customMapCellHp) customMapCellHp[idx] = 0;
-          customMapNavDirty = true;
-          revealCustomMapDamageNear(col*TERRAIN_CELL, row*TERRAIN_CELL, TERRAIN_CELL*0.75, 1);
+          destroyCustomMapCell(idx, col, row);
         }
         if (isMountainSolidAt(t.x,t.y)) { t.x = oldX; t.y = oldY; return true; }
       } else {
@@ -6823,6 +6820,20 @@ let customMapCompositeCanvas = null, customMapCompositeCtx = null;
 // step in revealCustomMapDamageNear - sized up to whatever the largest
 // stamp so far has needed, rather than allocating a fresh canvas per hit.
 let customMapRevealScratch = null, customMapRevealScratchCtx = null;
+// A SEPARATE persistent layer, drawn on top of customMapCompositeCanvas at
+// render time (see the "Custom illustrated map" block in render()) rather
+// than painted directly onto the composite itself. This matters because
+// revealCustomMapDamageNear re-derives its own touched region from scratch
+// on every call (fresh undamaged base + damaged masked by the current
+// cumulative alpha - see its own comment) - anything painted straight onto
+// customMapCompositeCanvas would simply get wiped out the next time any
+// later reveal call (an explosion, the Engineer again) happens to touch
+// that same region. Ground-track scarring (paintCustomMapGroundScar) and
+// baked rubble decals (maybePlaceCustomMapRubble) both live here instead,
+// immune to that redraw entirely - exactly the same reasoning procedural
+// maps' own separate, persistent damageCanvas already follows for crater
+// sprites.
+let customMapDecorCanvas = null, customMapDecorCtx = null;
 
 function initCustomMapCompositing(mapId) {
   const imgs = customMapImages[mapId];
@@ -6837,6 +6848,9 @@ function initCustomMapCompositing(mapId) {
   customMapCompositeCtx.drawImage(imgs.undamaged, 0, 0, w, h);
   customMapRevealScratch = document.createElement('canvas');
   customMapRevealScratchCtx = customMapRevealScratch.getContext('2d');
+  customMapDecorCanvas = document.createElement('canvas');
+  customMapDecorCanvas.width = w; customMapDecorCanvas.height = h;
+  customMapDecorCtx = customMapDecorCanvas.getContext('2d');
 }
 
 // Reveals the damaged artwork through at (worldX, worldY), growing the
@@ -6980,14 +6994,14 @@ function revealCustomMapDamageNear(worldX, worldY, worldRadius, intensity) {
   const ir = Math.max(4, worldRadius / cfg.worldScale);
 
   // A distinct, recognizable edge rather than a soft/feathered one: full
-  // opacity is held out to 85% of the radius, with only the remaining 15%
+  // opacity is held out to 75% of the radius, with only the remaining 25%
   // used to fade to transparent - just enough of a band to avoid a raw
   // pixel-hard cutoff (which would alias/jag at an angle), not a gradual
   // bleed across the whole radius the way a 0-to-1 two-stop gradient gives.
   const clampedIntensity = Math.max(0,Math.min(1,intensity));
   const grad = customMapRevealCtx.createRadialGradient(ix, iy, 0, ix, iy, ir);
   grad.addColorStop(0, `rgba(255,255,255,${clampedIntensity})`);
-  grad.addColorStop(0.85, `rgba(255,255,255,${clampedIntensity})`);
+  grad.addColorStop(0.75, `rgba(255,255,255,${clampedIntensity})`);
   grad.addColorStop(1, 'rgba(255,255,255,0)');
   customMapRevealCtx.fillStyle = grad;
   customMapRevealCtx.beginPath();
@@ -7020,6 +7034,101 @@ function revealCustomMapDamageNear(worldX, worldY, worldRadius, intensity) {
   customMapRevealScratchCtx.globalCompositeOperation = 'source-over';
 
   customMapCompositeCtx.drawImage(customMapRevealScratch, 0, 0, rw, rh, rx, ry, rw, rh);
+}
+
+// Explicit, unambiguous visual mark for ground that has no building/wall
+// HP to destroy and no distinctly different "damaged" art drawn for it in
+// the map's own damaged.png (that asset was authored to show visibly
+// dramatic destruction for buildings and walls specifically - plain
+// ground areas differ from their undamaged version mostly in overall
+// color grading there, which reads as far too subtle a shift to actually
+// look like "damage"). Painted onto customMapDecorCtx (see its own
+// comment), never customMapCompositeCtx, so it survives later nearby
+// reveal calls redrawing that same region from scratch. Same sharp-edge
+// treatment as revealCustomMapDamageNear's own gradient, for visual
+// consistency between the two.
+function paintCustomMapGroundScar(worldX, worldY, worldRadius) {
+  if (!activeCustomMapId || !customMapDecorCtx) return;
+  const cfg = CUSTOM_MAPS[activeCustomMapId];
+  const ix = worldX / cfg.worldScale, iy = worldY / cfg.worldScale;
+  const ir = Math.max(4, worldRadius / cfg.worldScale);
+  const grad = customMapDecorCtx.createRadialGradient(ix, iy, 0, ix, iy, ir);
+  grad.addColorStop(0, 'rgba(46,38,30,0.45)');
+  grad.addColorStop(0.75, 'rgba(46,38,30,0.45)');
+  grad.addColorStop(1, 'rgba(46,38,30,0)');
+  customMapDecorCtx.fillStyle = grad;
+  customMapDecorCtx.beginPath();
+  customMapDecorCtx.arc(ix, iy, ir, 0, Math.PI*2);
+  customMapDecorCtx.fill();
+}
+
+// Rubble decals: ten small debris-pile sprites (see
+// assets/terrain/custom_maps/rubble/), baked permanently around a
+// destroyed building/wall cell - never on open ground, see
+// destroyCustomMapCell below, the only caller. Purely decorative: no
+// collision, no gameplay effect of any kind. Loaded once up front exactly
+// like customMapImages above, with the same deferred "ready" pattern
+// (drawImage on a not-yet-decoded Image silently does nothing, so
+// maybePlaceCustomMapRubble checks naturalWidth before using one).
+const CUSTOM_MAP_RUBBLE_COUNT = 10;
+const customMapRubbleImages = [];
+const customMapRubbleReady = [];
+for (let __rubbleI = 1; __rubbleI <= CUSTOM_MAP_RUBBLE_COUNT; __rubbleI++) {
+  const __rubbleImg = new Image();
+  const __rubbleIdx = __rubbleI - 1;
+  customMapRubbleReady.push(false);
+  __rubbleImg.onload = () => { customMapRubbleReady[__rubbleIdx] = true; };
+  __rubbleImg.src = `assets/terrain/custom_maps/rubble/rubble${__rubbleI}.png`;
+  customMapRubbleImages.push(__rubbleImg);
+}
+
+// Rolled once per destroyed building/wall cell (see destroyCustomMapCell) -
+// only about 1 in 5 destructions gets a rubble pile, not every single one,
+// so the battlefield doesn't end up carpeted in identical debris wherever
+// anything broke.
+const CUSTOM_MAP_RUBBLE_CHANCE = 0.2;
+function maybePlaceCustomMapRubble(worldX, worldY) {
+  if (!activeCustomMapId || !customMapDecorCtx) return;
+  if (Math.random() >= CUSTOM_MAP_RUBBLE_CHANCE) return;
+  const pick = Math.floor(Math.random() * CUSTOM_MAP_RUBBLE_COUNT);
+  const img = customMapRubbleImages[pick];
+  if (!customMapRubbleReady[pick] || !img.naturalWidth) return;
+  const cfg = CUSTOM_MAPS[activeCustomMapId];
+  // Scatter it somewhere within the destroyed cell's own footprint rather
+  // than dead-center every time - TERRAIN_CELL*0.35 keeps it comfortably
+  // inside that one cell rather than spilling into a neighbor.
+  const jitterWorld = TERRAIN_CELL * 0.5;
+  const px = worldX + (Math.random()*2-1)*jitterWorld;
+  const py = worldY + (Math.random()*2-1)*jitterWorld;
+  const ix = px / cfg.worldScale, iy = py / cfg.worldScale;
+  // Target size in image-space scaled to 1.4x a single terrain cell - a
+  // direct 1:1 cell match (tried first) measured out to roughly a single
+  // window-sized detail against this art's own density of building
+  // texture, easy to miss entirely; 1.4x reads as a clearly distinct pile
+  // without dwarfing the structure it's sitting next to. The sheet's own
+  // icons aren't uniform width/height, so scale by whichever dimension is
+  // larger, keeping every pile's visual footprint consistent regardless of
+  // which one got picked.
+  const targetSpan = (TERRAIN_CELL * 1.4) / cfg.worldScale;
+  const scale = targetSpan / Math.max(img.naturalWidth, img.naturalHeight);
+  const dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
+  customMapDecorCtx.drawImage(img, ix - dw/2, iy - dh/2, dw, dh);
+}
+
+// Single shared point for "a destructible building/wall cell has just
+// reached 0 HP" - both damageCustomMapCellsNear (weapon splash/direct
+// hits, and the Engineer's own wide-radius clearing call) and the
+// Engineer's guaranteed exact-cell clear in resolveMountainCollision call
+// this rather than duplicating the clear-and-reveal steps inline. Centralizes
+// the rubble-placement roll too, so both destruction paths get it
+// identically rather than needing it added twice.
+function destroyCustomMapCell(idx, col, row) {
+  mountainSolid[idx] = 0;
+  if (customMapCellHp) customMapCellHp[idx] = 0;
+  customMapNavDirty = true;
+  const cx = col*TERRAIN_CELL, cy = row*TERRAIN_CELL;
+  revealCustomMapDamageNear(cx, cy, TERRAIN_CELL*0.75, 1);
+  maybePlaceCustomMapRubble(cx, cy);
 }
 
 function processCustomMapMask(mapId) {
@@ -7154,15 +7263,14 @@ function damageCustomMapCellsNear(x, y, radius, amount, falloff) {
       const newHp = Math.max(0, customMapCellHp[idx] - appliedAmount);
       customMapCellHp[idx] = newHp;
       if (newHp === 0 && mountainSolid[idx] === 1) {
-        mountainSolid[idx] = 0;
-        customMapNavDirty = true;
         // A cell that has actually opened up for movement should always
         // read as visibly destroyed too, not just however partially
         // scarred the accumulated hits up to this point happened to leave
-        // it - full intensity here, independent of and in addition to
-        // whatever revealCustomMapDamageNear call already ran at the
-        // blast's own center in resolveHit.
-        revealCustomMapDamageNear(cx, cy, TERRAIN_CELL*0.75, 1);
+        // it - destroyCustomMapCell's own full-intensity reveal call
+        // handles that, independent of and in addition to whatever
+        // revealCustomMapDamageNear call already ran at the blast's own
+        // center in resolveHit.
+        destroyCustomMapCell(idx, col, row);
       }
     }
   }
@@ -10662,10 +10770,21 @@ function updateTank(t, dt, now) {
   // displacement (the same movement check used just below for the Assault
   // Tank and for setup-time resets), so it doesn't re-stamp the exact same
   // spot every single frame while sitting still.
+  //
+  // Two calls, not one: revealCustomMapDamageNear keeps bumping the
+  // stealth-detection grid and compositing in whatever the damaged.png art
+  // shows here, same as any other damage source - but that art was
+  // authored to show dramatic, obvious destruction for buildings and
+  // walls specifically, and differs from the undamaged version over plain
+  // ground mostly in subtle overall color grading, which doesn't actually
+  // read as "damage" to a player looking at it. paintCustomMapGroundScar
+  // is the explicit, unmistakable mark that makes the track visible
+  // regardless of how subtle the underlying art is in a given spot.
   if (t.unitType === 'engineer' && activeCustomMapId) {
     const engMoved = Math.hypot(t.x-startX, t.y-startY);
     if (engMoved > 0.5) {
       revealCustomMapDamageNear(t.x, t.y, ENGINEER_GROUND_TRACK_RADIUS, 1);
+      paintCustomMapGroundScar(t.x, t.y, ENGINEER_GROUND_TRACK_RADIUS);
     }
   }
 
@@ -12467,6 +12586,7 @@ function enterPlayMode(mapSize, biome, mechsCanCapture, neutralStartRed, customM
     // there's no correctness gap either way - this is just hygiene.
     customMapCompositeCanvas = null; customMapCompositeCtx = null;
     customMapRevealCanvas = null; customMapRevealCtx = null;
+    customMapDecorCanvas = null; customMapDecorCtx = null;
     customMapRevealEvents = [];
     customMapDamageIntensity = null;
     generateNewMap(mapSize || 'medium', biome || 'desert');
@@ -13674,6 +13794,13 @@ function render() {
     const bgtl = worldToScreen(0,0);
     const bgbr = worldToScreen(WORLD.w, WORLD.h);
     ctx.drawImage(customMapCompositeCanvas, bgtl.x, bgtl.y, bgbr.x-bgtl.x, bgbr.y-bgtl.y);
+    // Ground-track scars and baked rubble decals (see customMapDecorCanvas's
+    // own comment) - a separate persistent layer, drawn on top every frame
+    // so it survives customMapCompositeCanvas's own from-scratch redraws of
+    // whatever regions damage reveals keep touching underneath it.
+    if (customMapDecorCanvas) {
+      ctx.drawImage(customMapDecorCanvas, bgtl.x, bgtl.y, bgbr.x-bgtl.x, bgbr.y-bgtl.y);
+    }
   } else if (activeCustomMapId && customMapImageReady[activeCustomMapId].undamaged) {
     const bgtl = worldToScreen(0,0);
     const bgbr = worldToScreen(WORLD.w, WORLD.h);
