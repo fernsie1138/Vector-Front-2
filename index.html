@@ -603,6 +603,7 @@
       <button class="optionBtn" id="optCustomMapOff" data-group="customMap" data-value="off">OFF (PROCEDURAL)</button>
       <button class="optionBtn" id="optCustomMapCompound01" data-group="customMap" data-value="compound01">WALLED COMPOUND</button>
       <button class="optionBtn" id="optCustomMapParadiseCity" data-group="customMap" data-value="paradise_city">PARADISE CITY</button>
+      <button class="optionBtn" id="optCustomMapMesaCanyon" data-group="customMap" data-value="mesa_canyon">MESA CANYON</button>
     </div>
   </div>
   <div class="optionGroup">
@@ -895,7 +896,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 189;
+const GAME_VERSION = 190;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -1038,6 +1039,45 @@ const CUSTOM_MAPS = {
     // sit meaningfully closer together. World coordinates = the chosen
     // source-image pixel position x worldScale above.
     baseWorldPositions: { blue: {x: 2910, y: 525}, red: {x: 1100, y: 2635} },
+  },
+  mesa_canyon: {
+    label: 'Mesa Canyon',
+    undamagedSrc: 'assets/terrain/custom_maps/mesa_canyon/undamaged.png',
+    damagedSrc: 'assets/terrain/custom_maps/mesa_canyon/damaged.png',
+    maskSrc: 'assets/terrain/custom_maps/mesa_canyon/collision_mask.png',
+    worldScale: 2.5,
+    // This mask was authored to its own exact flat colors (sampled
+    // directly from the file: true black (0,0,0) mountains, pure green
+    // (0,255,0) trees, near-pure red (235,0,0) buildings, with no water
+    // and no separate wall category - just rock formations and buildings)
+    // - different enough from CUSTOM_MAP_MASK_COLORS' own tree/building
+    // values that matching against the shared defaults' tolerance would
+    // miss real pixels of both, so both get their own explicit entries
+    // here. water/wall are both disabled (the same -999 convention
+    // paradise_city already uses) since this map has neither - blue is
+    // used for base-position markers instead of water here, which is why
+    // water in particular must stay disabled rather than accidentally
+    // matching the base markers' own color as terrain.
+    //
+    // mountain (not present on either earlier custom map, see
+    // CUSTOM_MAP_MASK_COLORS' own comment) is the one new category this
+    // map actually needs: unlike building, a mountain cell here is a TRUE,
+    // indestructible obstacle - the Engineer's own resolveMountainCollision
+    // branch, lineBlockedForFiring, and issueMoveOrder's pathfinding-skip
+    // decision all tell it apart from a destructible building purely by
+    // this mask category never setting customMapCellHp (see
+    // processCustomMapMask and isTrueMountainCellAt's own comments) -
+    // there is no additional wiring needed beyond listing its real color
+    // here.
+    maskColors: { water: [-999,-999,-999], trees: [0,255,0], building: [235,0,0], wall: [-999,-999,-999], mountain: [0,0,0] },
+    maskColorTolerance: 55,
+    // Picked by locating the two blue "X" marker clusters drawn directly
+    // on the mask (not a separate category used for any terrain effect -
+    // see maskColors.water above on why blue couldn't double as that
+    // here) and converting each cluster's own pixel centroid to world
+    // coordinates via worldScale above. Both land on open, clear desert
+    // ground in the source art, not inside any mesa or settlement.
+    baseWorldPositions: { blue: {x: 2931, y: 401}, red: {x: 310, y: 2680} },
   },
 };
 const customMapImages = {}; // e.g. customMapImages.compound01.undamaged -> HTMLImageElement
@@ -4638,6 +4678,25 @@ function isMountainSolidAt(x, y) {
   const row = Math.max(0, Math.min(terrainRows-1, Math.round(y/TERRAIN_CELL)));
   return mountainSolid[row*terrainCols+col] === 1;
 }
+// A TRUE, indestructible mountain cell - as opposed to a solid cell that's
+// actually a destructible building or wall sharing the same mountainSolid
+// flag on a custom map (see processCustomMapMask's own comment on the
+// mountain category). customMapCellHp is left at its default 0 for a true
+// mountain and always nonzero for a destructible cell - that's the one
+// signal distinguishing them, used identically everywhere this matters:
+// resolveMountainCollision's Engineer branch, lineBlockedForFiring's own
+// line-walk for indirect fire, and issueMoveOrder's Engineer pathfinding-
+// skip decision. A procedural map has no customMapCellHp array at all, so
+// isMountainSolidAt alone already means "a true mountain" there with
+// nothing further to check - every call site can use this one function
+// regardless of map type, with no activeCustomMapId branching of its own.
+function isTrueMountainCellAt(x, y) {
+  if (!isMountainSolidAt(x, y)) return false;
+  if (!customMapCellHp) return true;
+  const col = Math.max(0, Math.min(terrainCols-1, Math.round(x/TERRAIN_CELL)));
+  const row = Math.max(0, Math.min(terrainRows-1, Math.round(y/TERRAIN_CELL)));
+  return customMapCellHp[row*terrainCols+col] <= 0;
+}
 function isLakeSolidAt(x, y) {
   const col = Math.max(0, Math.min(terrainCols-1, Math.round(x/TERRAIN_CELL)));
   const row = Math.max(0, Math.min(terrainRows-1, Math.round(y/TERRAIN_CELL)));
@@ -6046,22 +6105,30 @@ function lineBlockedBySight(x0,y0,x1,y1) {
 // or an ally already pointed it at in order to hit it).
 //
 // On a custom illustrated map, mountainSolid is shared between true
-// mountain terrain and buildings/walls (see processCustomMapMask) - and
-// today's only custom map has no true mountain terrain in it at all,
-// meaning everything currently solid there IS a building or wall, which
-// indirect fire is explicitly meant to ignore. So for an indirect-fire
-// unit on a custom map, this check is skipped outright rather than
-// querying mountainSolid at all - there is nothing in that grid for a
-// custom map that SHOULD block indirect fire. On a procedural map,
-// mountainSolid is still purely true mountains (buildings there have no
-// collision of their own to begin with), so lineBlockedBySight already
-// means exactly "blocked by a real mountain" there, with nothing further
-// needed - this falls straight through to it unchanged. A future custom
-// map that introduces genuine mountain-like impassable terrain into its
-// own mask would need a dedicated flag to distinguish it from
-// buildings/walls here; none exists yet because none of today's maps need it.
+// mountain terrain (Mesa Canyon's rock formations) and destructible
+// buildings/walls (see processCustomMapMask) - indirect fire is explicitly
+// meant to ignore the latter but still can't fire over the former, so for
+// an indirect-fire unit on a custom map this walks the line itself rather
+// than delegating to lineBlockedBySight, checking each solid cell's own
+// customMapCellHp (left at 0 for a true mountain, the same signal
+// resolveMountainCollision's own Engineer branch uses - see
+// processCustomMapMask's comment) to tell the two apart: a destructible
+// cell is skipped outright, a true mountain cell still blocks. On a
+// procedural map, mountainSolid is still purely true mountains (buildings
+// there have no collision of their own to begin with), so this falls
+// straight through to lineBlockedBySight unchanged, which already means
+// exactly "blocked by a real mountain" there with nothing further needed.
 function lineBlockedForFiring(t, x0, y0, x1, y1) {
-  if (INDIRECT_FIRE_UNIT_TYPES.has(t.unitType) && activeCustomMapId) return false;
+  if (INDIRECT_FIRE_UNIT_TYPES.has(t.unitType) && activeCustomMapId) {
+    const dist = Math.hypot(x1-x0, y1-y0);
+    const steps = Math.max(1, Math.ceil(dist / (TERRAIN_CELL*0.5)));
+    for (let i=1;i<steps;i++) {
+      const frac = i/steps;
+      const x = x0+(x1-x0)*frac, y = y0+(y1-y0)*frac;
+      if (isTrueMountainCellAt(x,y)) return true;
+    }
+    return false;
+  }
   return lineBlockedBySight(x0, y0, x1, y1);
 }
 // Embankment: "blocks enemy fire but allows friendly fire to pass...
@@ -6143,20 +6210,28 @@ function resolveMountainCollision(t, oldX, oldY) {
       return true;
     }
     // mountainSolid is the one grid that needs map-type-aware handling: on
-    // a custom map it's shared between true mountains and buildings/walls
-    // (see processCustomMapMask) - rather than bouncing off a cell there
-    // the way every other vehicle does, the Engineer destroys it outright
-    // and drives straight through, reusing the exact same cell-HP/damage-
+    // a custom map it's shared between true mountains (Mesa Canyon's rock
+    // formations) and destructible buildings/walls (see processCustomMapMask)
+    // - a destructible cell is the one the Engineer destroys outright and
+    // drives straight through, reusing the exact same cell-HP/damage-
     // reveal/nav-rebuild machinery weapon fire already uses (see
     // damageCustomMapCellsNear - a cell reaching 0 HP there already both
     // clears mountainSolid and calls revealCustomMapDamageNear at full
     // intensity, so nothing extra is needed here beyond the call itself).
-    // On a procedural map mountainSolid is still purely true mountains,
-    // which the Engineer can't destroy any more than any other vehicle
-    // can, so it bounces back exactly like normal there - "cannot pass
-    // mountains" holds on both map types, just for different reasons.
+    // A TRUE mountain cell - customMapCellHp left at 0, the one signal that
+    // distinguishes it from a destructible cell sharing the same
+    // mountainSolid flag, see processCustomMapMask's own comment - bounces
+    // the Engineer back exactly like any other vehicle, the same as a
+    // procedural map's mountainSolid (which is still purely true mountains
+    // there, with no custom-map destructible concept to speak of at all).
+    // "Cannot pass mountains" holds on every map, just via different
+    // mechanisms depending on which kind of solid cell is actually there.
     if (isMountainSolidAt(t.x,t.y)) {
-      if (activeCustomMapId) {
+      const col0 = Math.max(0, Math.min(terrainCols-1, Math.round(t.x/TERRAIN_CELL)));
+      const row0 = Math.max(0, Math.min(terrainRows-1, Math.round(t.y/TERRAIN_CELL)));
+      const idx0 = row0*terrainCols + col0;
+      const isDestructibleHere = activeCustomMapId && !isTrueMountainCellAt(t.x, t.y);
+      if (isDestructibleHere) {
         // Wider-radius clear for a path with some real width - falloff-
         // enabled (unlike the weapon-damage callers of this same function,
         // which intentionally apply full force flatly across an
@@ -6165,7 +6240,8 @@ function resolveMountainCollision(t, oldX, oldY) {
         // radius's own edge gets very little of it, and only actually
         // dies once the vehicle has traveled close enough to it for real,
         // rather than merely having passed somewhere within a wide circle
-        // of it once.
+        // of it once. damageCustomMapCellsNear's own customMapCellHp<=0
+        // skip means this can never touch a true mountain cell regardless.
         damageCustomMapCellsNear(t.x, t.y, ENGINEER_CLEAR_RADIUS, ENGINEER_CLEAR_AMOUNT, true);
         // The exact cell the Engineer is actually blocked by, though, has
         // to be guaranteed cleared on first contact regardless of where
@@ -6176,11 +6252,8 @@ function resolveMountainCollision(t, oldX, oldY) {
         // an Engineer could stall indefinitely bouncing off a cell whose
         // nearest-cell-center distance happened to put it just past where
         // the falloff call still does anything.
-        const col = Math.max(0, Math.min(terrainCols-1, Math.round(t.x/TERRAIN_CELL)));
-        const row = Math.max(0, Math.min(terrainRows-1, Math.round(t.y/TERRAIN_CELL)));
-        const idx = row*terrainCols + col;
-        if (mountainSolid[idx] === 1) {
-          destroyCustomMapCell(idx, col, row);
+        if (mountainSolid[idx0] === 1) {
+          destroyCustomMapCell(idx0, col0, row0);
         }
         if (isMountainSolidAt(t.x,t.y)) { t.x = oldX; t.y = oldY; return true; }
       } else {
@@ -6652,20 +6725,32 @@ function issueMoveOrder(t, x, y, suppressAutoEngage) {
   // them to route around - so they always take the direct "walk straight
   // there" branch below regardless of what lineBlockedByMountain would
   // otherwise say for a ground unit on the same line. The Engineer on a
-  // custom map is the same situation for a different reason: mountainSolid
-  // there is buildings/walls (see processCustomMapMask), which it destroys
-  // outright rather than needing to route around (see
-  // resolveMountainCollision's own engineer branch) - so the normal A*
-  // pathfinding below, which treats every mountainSolid cell as a hard
-  // obstacle to avoid, would otherwise send it the long way around
-  // something it's fully capable of just driving through. Water still
-  // physically stops it (resolveMountainCollision again), it just isn't
-  // routed around in advance the way a normal unit's path would - it can
-  // end up stopped at the water's edge rather than finding a way around,
-  // which for a specialized demolition vehicle is an acceptable trade-off
-  // against the alternative of a whole separate obstacle-aware nav grid
-  // just for this one unit type.
-  if (FLYING_UNIT_TYPES.has(t.unitType) || (t.unitType === 'engineer' && activeCustomMapId) || !lineBlockedByMountain(t.x, t.y, x, y)) {
+  // custom map is similar but narrower: mountainSolid there can be either
+  // a destructible building/wall (see processCustomMapMask), which it
+  // destroys outright rather than needing to route around (see
+  // resolveMountainCollision's own engineer branch), or a TRUE mountain
+  // (Mesa Canyon's rock formations), which it can't destroy any more than
+  // any other vehicle can - isTrueMountainCellAt is the one signal
+  // distinguishing the two, same as resolveMountainCollision/
+  // lineBlockedForFiring already use. engineerLineBlocked below only
+  // treats an actual true-mountain cell as a reason to fall back to normal
+  // A* pathfinding; a destructible cell is never a reason to route around
+  // in advance. Water still physically stops it (resolveMountainCollision
+  // again), it just isn't routed around in advance the way a true mountain
+  // now is - it can end up stopped at the water's edge rather than finding
+  // a way around, which for a specialized demolition vehicle is an
+  // acceptable trade-off against extending the nav grid itself to treat
+  // water differently.
+  const engineerLineBlocked = t.unitType === 'engineer' && activeCustomMapId && (() => {
+    const dist = Math.hypot(x-t.x, y-t.y);
+    const steps = Math.max(1, Math.ceil(dist / (TERRAIN_CELL*0.5)));
+    for (let i=1;i<steps;i++) {
+      const frac = i/steps;
+      if (isTrueMountainCellAt(t.x+(x-t.x)*frac, t.y+(y-t.y)*frac)) return true;
+    }
+    return false;
+  })();
+  if (FLYING_UNIT_TYPES.has(t.unitType) || (t.unitType === 'engineer' && activeCustomMapId && !engineerLineBlocked) || !lineBlockedByMountain(t.x, t.y, x, y)) {
     t.target = {x,y};
     t.path = null;
   } else {
@@ -6828,6 +6913,13 @@ const CUSTOM_MAP_MASK_COLORS = {
   trees:    [0, 180, 0],
   building: [200, 0, 0],
   wall:     [120, 0, 160],
+  // Never matches by default (same convention paradise_city already uses
+  // to disable "wall" for itself) - a true, indestructible mountain is a
+  // new category Mesa Canyon introduces, and compound01/paradise_city's
+  // own masks were never authored with this color in mind, so leaving it
+  // unmatchable here keeps both of them exactly as they already behave
+  // unless a map's own maskColors override sets a real color for it.
+  mountain: [-999, -999, -999],
 };
 function colorCloseEnough(r,g,b, target, tolerance=40) {
   return Math.abs(r-target[0]) <= tolerance && Math.abs(g-target[1]) <= tolerance && Math.abs(b-target[2]) <= tolerance;
@@ -7237,7 +7329,18 @@ function processCustomMapMask(mapId) {
   // CUSTOM_MAP_MASK_COLORS/40 when it doesn't specify its own override, so
   // this costs nothing for a map whose mask genuinely was authored to that
   // exact spec (compound01).
-  const maskColors = cfg.maskColors || CUSTOM_MAP_MASK_COLORS;
+  //
+  // Merged with the shared defaults rather than replacing them outright -
+  // paradise_city's own override predates the "mountain" category (added
+  // for Mesa Canyon) and only lists water/trees/building/wall, so a plain
+  // `cfg.maskColors || CUSTOM_MAP_MASK_COLORS` would leave maskColors.mountain
+  // undefined for it and crash the very first colorCloseEnough call below
+  // that checks it. Merging fills in any category a map's own override
+  // doesn't mention from the shared (safe, never-matching unless a map
+  // deliberately sets its own) defaults instead, so an older map's config
+  // never needs updating just because a newer category was introduced for
+  // a different map.
+  const maskColors = Object.assign({}, CUSTOM_MAP_MASK_COLORS, cfg.maskColors || {});
   const maskTolerance = cfg.maskColorTolerance || 40;
   const maskImg = customMapImages[mapId].mask;
   const off = document.createElement('canvas');
@@ -7261,6 +7364,21 @@ function processCustomMapMask(mapId) {
       const idx = row*terrainCols + col;
       if (colorCloseEnough(c[0],c[1],c[2], maskColors.water, maskTolerance)) {
         lakeSolid[idx] = 1;
+      } else if (colorCloseEnough(c[0],c[1],c[2], maskColors.mountain, maskTolerance)) {
+        // A TRUE, indestructible mountain (Mesa Canyon's own rock
+        // formations) - mountainSolid is set exactly like wall/building
+        // below so every existing "is this cell blocked" check (movement,
+        // line-of-fire, pathing) treats it identically, but
+        // customMapCellHp is deliberately left at its default 0 rather
+        // than given a wall/building HP value. That's the one and only
+        // signal resolveMountainCollision's own Engineer branch uses to
+        // tell a real mountain apart from a destructible building/wall
+        // sharing the same mountainSolid flag - see its own comment there.
+        // damageCustomMapCellsNear already independently skips any cell
+        // with customMapCellHp<=0 (see its own comment), so weapon splash
+        // damage and the Engineer's wide-radius clearing call can never
+        // touch a true mountain's HP either, with no changes needed there.
+        mountainSolid[idx] = 1;
       } else if (colorCloseEnough(c[0],c[1],c[2], maskColors.wall, maskTolerance)) {
         mountainSolid[idx] = 1;
         customMapCellHp[idx] = CUSTOM_MAP_CELL_HP.wall;
