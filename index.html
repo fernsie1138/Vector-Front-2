@@ -604,6 +604,7 @@
       <button class="optionBtn" id="optCustomMapCompound01" data-group="customMap" data-value="compound01">WALLED COMPOUND</button>
       <button class="optionBtn" id="optCustomMapParadiseCity" data-group="customMap" data-value="paradise_city">PARADISE CITY</button>
       <button class="optionBtn" id="optCustomMapMesaCanyon" data-group="customMap" data-value="mesa_canyon">MESA CANYON</button>
+      <button class="optionBtn" id="optCustomMapFactoryYards" data-group="customMap" data-value="factory_yards">FACTORY YARDS</button>
     </div>
   </div>
   <div class="optionGroup">
@@ -896,7 +897,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 190;
+const GAME_VERSION = 192;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -926,14 +927,14 @@ const ROAD_TILE_DATA_URIS = {"road_straight": "assets/terrain/roads/road_straigh
 
 const CRATER_SPRITE_DATA_URIS = {"crater1": "assets/terrain/craters/crater1.png", "crater2": "assets/terrain/craters/crater2.png", "crater3": "assets/terrain/craters/crater3.png", "crater4": "assets/terrain/craters/crater4.png", "crater5": "assets/terrain/craters/crater5.png", "crater6": "assets/terrain/craters/crater6.png"};
 
-const SPRITE_DATA_URIS = {"body_atinfantry": "assets/units/body/body_atinfantry.png", "wreck_atinfantry": "assets/units/body/wreck_atinfantry.png", "body_sappers": "assets/units/body/body_sappers.png", "wreck_sappers": "assets/units/body/wreck_sappers.png", "body_siegemortar": "assets/units/body/body_siegemortar.png", "wreck_siegemortar": "assets/units/body/wreck_siegemortar.png", "body_barricade": "assets/units/body/body_barricade.png", "wreck_barricade": "assets/units/body/wreck_barricade.png", "body_artillery": "assets/units/body/body_artillery.png", "body_blockhouse": "assets/units/body/body_blockhouse.png", "body_foxhole": "assets/units/body/body_foxhole.png", "body_infantry": "assets/units/body/body_infantry.png", "body_mortar": "assets/units/body/body_mortar.png", "body_apc": "assets/units/body/body_apc.png", "body_engineer": "assets/units/body/body_apc.png", "body_assaulttank": "assets/units/body/body_assaulttank.png", "body_autotank": "assets/units/body/body_autotank.png", "body_lrmmech": "assets/units/body/body_lrmmech.png", "body_mech": "assets/units/body/body_mech.png", "body_scout": "assets/units/body/body_scout.png", "body_tank": "assets/units/body/body_tank.png", "body_turret": "assets/units/body/body_turret.png", "body_medic": "assets/units/body/body_medic_v2.png", "body_watchtower": "assets/units/body/body_watchtower.png", "body_heavyartillery": "assets/units/body/body_heavyartillery.png", "body_embankment": "assets/units/body/body_embankment.png", "body_technicalmg": "assets/units/body/body_technicalmg.png", "body_technicalat": "assets/units/body/body_technicalat.png", "body_technicalmortar": "assets/units/body/body_technicalmortar.png", "body_hkunit": "assets/units/body/body_hkunit.png"};
+const SPRITE_DATA_URIS = {"body_atinfantry": "assets/units/body/body_atinfantry.png", "wreck_atinfantry": "assets/units/body/wreck_atinfantry.png", "body_sappers": "assets/units/body/body_sappers.png", "wreck_sappers": "assets/units/body/wreck_sappers.png", "body_siegemortar": "assets/units/body/body_siegemortar.png", "wreck_siegemortar": "assets/units/body/wreck_siegemortar.png", "body_barricade": "assets/units/body/body_barricade.png", "wreck_barricade": "assets/units/body/wreck_barricade.png", "body_artillery": "assets/units/body/body_artillery.png", "body_blockhouse": "assets/units/body/body_blockhouse.png", "body_foxhole": "assets/units/body/body_foxhole.png", "body_infantry": "assets/units/body/body_infantry.png", "body_mortar": "assets/units/body/body_mortar.png", "body_apc": "assets/units/body/body_apc.png", "body_engineer": "assets/units/body/body_apc.png", "body_assaulttank": "assets/units/body/body_assaulttank.png", "body_autotank": "assets/units/body/body_autotank.png", "body_lrmmech": "assets/units/body/body_lrmmech.png", "body_mech": "assets/units/body/body_mech.png", "body_scout": "assets/units/body/body_scout.png", "body_tank": "assets/units/body/body_tank.png", "body_turret": "assets/units/body/body_turret.png", "body_medic": "assets/units/body/body_medic_v2.png", "body_watchtower": "assets/units/body/body_watchtower.png", "body_heavyartillery": "assets/units/body/body_heavyartillery.png", "body_embankment": "assets/units/body/body_embankment.png", "body_trench": "assets/terrain/structures/body_trench.png", "body_technicalmg": "assets/units/body/body_technicalmg.png", "body_technicalat": "assets/units/body/body_technicalat.png", "body_technicalmortar": "assets/units/body/body_technicalmortar.png", "body_hkunit": "assets/units/body/body_hkunit.png"};
 
 const NEW_BUILDING_SPRITE_DATA_URIS = {"b1_normal": "assets/buildings/standard/b1_normal.png", "b1_slight": "assets/buildings/standard/b1_slight.png", "b1_extensive": "assets/buildings/standard/b1_extensive.png", "b1_destroyed": "assets/buildings/standard/b1_destroyed.png", "b2_normal": "assets/buildings/standard/b2_normal.png", "b2_slight": "assets/buildings/standard/b2_slight.png", "b2_extensive": "assets/buildings/standard/b2_extensive.png", "b2_destroyed": "assets/buildings/standard/b2_destroyed.png", "b3_normal": "assets/buildings/standard/b3_normal.png", "b3_slight": "assets/buildings/standard/b3_slight.png", "b3_extensive": "assets/buildings/standard/b3_extensive.png", "b3_destroyed": "assets/buildings/standard/b3_destroyed.png", "b4_normal": "assets/buildings/standard/b4_normal.png", "b4_slight": "assets/buildings/standard/b4_slight.png", "b4_extensive": "assets/buildings/standard/b4_extensive.png", "b4_destroyed": "assets/buildings/standard/b4_destroyed.png", "b5_normal": "assets/buildings/standard/b5_normal.png", "b5_slight": "assets/buildings/standard/b5_slight.png", "b5_extensive": "assets/buildings/standard/b5_extensive.png", "b5_destroyed": "assets/buildings/standard/b5_destroyed.png", "b6_normal": "assets/buildings/standard/b6_normal.png", "b6_slight": "assets/buildings/standard/b6_slight.png", "b6_extensive": "assets/buildings/standard/b6_extensive.png", "b6_destroyed": "assets/buildings/standard/b6_destroyed.png", "b7_normal": "assets/buildings/standard/b7_normal.png", "b7_slight": "assets/buildings/standard/b7_slight.png", "b7_extensive": "assets/buildings/standard/b7_extensive.png", "b7_destroyed": "assets/buildings/standard/b7_destroyed.png", "b8_normal": "assets/buildings/standard/b8_normal.png", "b8_slight": "assets/buildings/standard/b8_slight.png", "b8_extensive": "assets/buildings/standard/b8_extensive.png", "b8_destroyed": "assets/buildings/standard/b8_destroyed.png", "b9_normal": "assets/buildings/standard/b9_normal.png", "b9_slight": "assets/buildings/standard/b9_slight.png", "b9_extensive": "assets/buildings/standard/b9_extensive.png", "b9_destroyed": "assets/buildings/standard/b9_destroyed.png", "b10_normal": "assets/buildings/standard/b10_normal.png", "b10_slight": "assets/buildings/standard/b10_slight.png", "b10_extensive": "assets/buildings/standard/b10_extensive.png", "b10_destroyed": "assets/buildings/standard/b10_destroyed.png"};
 
 const BUILDING_SPRITE_DATA_URIS = {"square_normal": "assets/buildings/legacy/square_normal.png", "square_damaged": "assets/buildings/legacy/square_damaged.png", "rectangle_normal": "assets/buildings/legacy/rectangle_normal.png", "rectangle_damaged": "assets/buildings/legacy/rectangle_damaged.png", "L_normal": "assets/buildings/legacy/L_normal.png", "L_damaged": "assets/buildings/legacy/L_damaged.png", "cross_normal": "assets/buildings/legacy/cross_normal.png", "cross_damaged": "assets/buildings/legacy/cross_damaged.png"};
 
 const HULL_TURRET_UNITS = [];
-const BODY_ONLY_UNITS = ['artillery','infantry','mortar','blockhouse','foxhole','tank','scout','autotank','turret','assaulttank','apc','engineer','mech','lrmmech','atinfantry','sappers','siegemortar','barricade','medic','watchtower','heavyartillery','embankment','technicalmg','technicalat','technicalmortar','hkunit'];
+const BODY_ONLY_UNITS = ['artillery','infantry','mortar','blockhouse','foxhole','tank','scout','autotank','turret','assaulttank','apc','engineer','mech','lrmmech','atinfantry','sappers','siegemortar','barricade','medic','watchtower','heavyartillery','embankment','trench','technicalmg','technicalat','technicalmortar','hkunit'];
 
 // Units whose sprite art was drawn facing "up" (toward the top of its own
 // source image) rather than facing "right" - this engine's rotation
@@ -1078,6 +1079,35 @@ const CUSTOM_MAPS = {
     // coordinates via worldScale above. Both land on open, clear desert
     // ground in the source art, not inside any mesa or settlement.
     baseWorldPositions: { blue: {x: 2931, y: 401}, red: {x: 310, y: 2680} },
+  },
+  factory_yards: {
+    label: 'Factory Yards',
+    undamagedSrc: 'assets/terrain/custom_maps/factory_yards/undamaged.png',
+    damagedSrc: 'assets/terrain/custom_maps/factory_yards/damaged.png',
+    maskSrc: 'assets/terrain/custom_maps/factory_yards/collision_mask.png',
+    // Source art is 1024px square (compound01/paradise_city/mesa_canyon
+    // are all 1254px) - kept at the same 2.5 worldScale regardless rather
+    // than scaling up to match their world size, since 1024*2.5=2560 is
+    // already close to BASE_WORLD_W (2600, the Medium procedural map's own
+    // baseline) - a natural, comparable scale on its own merits, not
+    // something that needed adjusting to line up with the other three maps.
+    worldScale: 2.5,
+    // Sampled directly from the file: water (37,126,205), buildings
+    // (198,33,37) - no distinct wall color, and no trees at all in this
+    // industrial refinery scene (unlike Mesa Canyon's desert scrubland),
+    // so both stay disabled. green (not listed here - see
+    // baseWorldPositions below) marks the two base positions directly on
+    // the mask, the same role blue plays for Mesa Canyon and Paradise
+    // City - never a terrain color here, so it's never matched against
+    // anything that would turn it into a destructible or collision cell.
+    maskColors: { water: [37,126,205], trees: [-999,-999,-999], building: [198,33,37], wall: [-999,-999,-999], mountain: [-999,-999,-999] },
+    maskColorTolerance: 45,
+    // Picked by locating the two green "X" marker clusters drawn directly
+    // on the mask and converting each cluster's own pixel centroid to
+    // world coordinates via worldScale above. Both land on open ground in
+    // the source art - the northern one on a marked-out yard/lot, the
+    // southern one on open cracked earth near (but clear of) a tank farm.
+    baseWorldPositions: { blue: {x: 1715, y: 118}, red: {x: 961, y: 2464} },
   },
 };
 const customMapImages = {}; // e.g. customMapImages.compound01.undamaged -> HTMLImageElement
@@ -2985,7 +3015,7 @@ const UNIT_STATS = {
   // branch (building/wall destruction, mountain/water still impassable).
   engineer: {
     cost: 50, hp: 90, armor: 8, damage: 6, fireCooldown: 0.33,
-    range: 100, sight: 240, react: 456, speed: 15, shellSpeed: 1500,
+    range: 100, sight: 240, react: 456, speed: 20, shellSpeed: 1500,
     blastRadius: 0, setupTime: 0, canFireWhileMoving: true, collisionRadius: 15
   },
   // LRM Mech: same chassis/role as Mech (large, slow, heavily armoured), but
@@ -3105,6 +3135,23 @@ const UNIT_STATS = {
     cost: 0, hp: 500, armor: 8, damage: 0, fireCooldown: 1,
     range: 0, sight: 200, react: 0, speed: 10, shellSpeed: 0,
     blastRadius: 0, setupTime: 20, canFireWhileMoving: false, collisionRadius: 40
+  },
+  // Trench: a dug-in defensive fighting position, field-built by the
+  // Engineer only (see BUILDABLE_STRUCTURES.trench) - same weaponless,
+  // never-rotates profile as Foxhole/Embankment (see NO_ROTATION_UNIT_TYPES),
+  // with its own longer, wider art (see SPRITE_DATA_URIS.body_trench)
+  // reflected in a larger collisionRadius than either of them. HP/armor
+  // sit between the two: tougher than a Foxhole's shallow dugout, short of
+  // Embankment's solid earthwork. Concealment for any Infantry-class unit
+  // nearby - "remain in stealth as they would in cratered or damaged
+  // ground" - comes from adding 'trench' to CONCEALING_UNIT_TYPES, reusing
+  // the exact same 5-second-dwell mechanic Foxhole/Blockhouse/craters/
+  // damaged ground already share, rather than a separate concealment rule
+  // of its own.
+  trench: {
+    cost: 0, hp: 400, armor: 12, damage: 0, fireCooldown: 1,
+    range: 0, sight: 200, react: 0, speed: 10, shellSpeed: 0,
+    blastRadius: 0, setupTime: 20, canFireWhileMoving: false, collisionRadius: 55
   },
   // Technicals: civilian utility trucks with a weapon mounted on the back -
   // fast, cheap, unarmored vehicles. Share one base profile (cost, hp, armor,
@@ -8335,12 +8382,16 @@ function updateSelectionUI(){
     stop.classList.remove('disabled');
     defend.classList.remove('disabled');
     holdFire.classList.remove('disabled');
-    // BUILD only ever applies to Infantry - enabled only when the current
-    // selection is entirely Infantry (mirrors how a mixed selection still
-    // allows ATTACK/STOP/DEFEND for everyone, but building a Foxhole only
-    // makes sense for the unit type that can actually do it).
-    const allInfantry = [...selected].every(t => INFANTRY_CLASS_TYPES.has(t.unitType));
-    if (allInfantry) build.classList.remove('disabled');
+    // BUILD is enabled only when the current selection can ALL actually use
+    // it (mirrors how a mixed selection still allows ATTACK/STOP/DEFEND for
+    // everyone, but building a Foxhole only makes sense for a unit type
+    // that can actually do it) - the same eligibility check the BUILD
+    // click handler itself uses below, rather than a separate, narrower
+    // Infantry-only check that would silently exclude any non-Infantry
+    // unit type BUILDABLE_STRUCTURES grants building rights to (the
+    // Engineer, in particular - a Vehicle, not Infantry-class).
+    const allCanBuild = [...selected].every(t => !t.permanentlyDeployed && (getBuildableStructuresFor(t.unitType).length>0 || t.unitType === 'medic'));
+    if (allCanBuild) build.classList.remove('disabled');
     else build.classList.add('disabled');
   }
 }
@@ -10451,7 +10502,11 @@ function resolveUnitCollisions() {
 // armor bonus) - being infantry-class no longer implies being able to
 // build, now that AT Infantry exists as a counterexample.
 const BUILDABLE_STRUCTURES = {
-  foxhole: { label: 'Foxhole', buildTime: 30, builtBy: ['infantry','sappers'] },
+  // Engineer added alongside Infantry/Sappers - "allow the engineering
+  // vehicle to build foxholes, embankments, and trenches" - scoped to only
+  // those three, not the Sapper's full set (Barricade/Turret/Watch Tower/
+  // Heavy Artillery stay Sapper-only, unchanged).
+  foxhole: { label: 'Foxhole', buildTime: 30, builtBy: ['infantry','sappers','engineer'] },
   barricade: { label: 'Barricade', buildTime: 30, builtBy: ['sappers'] },
   // Turret is no longer purchasable at the home base at all - "only can be
   // built by Sappers" - so, like Watch Tower/Heavy Artillery below, its cost
@@ -10468,7 +10523,10 @@ const BUILDABLE_STRUCTURES = {
   // supply).
   watchtower: { label: 'Watch Tower', buildTime: 30, builtBy: ['sappers'], cost: UNIT_STATS.watchtower.cost },
   heavyartillery: { label: 'Heavy Artillery', buildTime: 30, builtBy: ['sappers'], cost: UNIT_STATS.heavyartillery.cost },
-  embankment: { label: 'Embankment', buildTime: 30, builtBy: ['sappers'] }
+  embankment: { label: 'Embankment', buildTime: 30, builtBy: ['sappers','engineer'] },
+  // Trench is the Engineer's own structure - no Sapper or Infantry builder
+  // at all, unlike Foxhole/Embankment just above (both shared with Sapper).
+  trench: { label: 'Trench', buildTime: 30, builtBy: ['engineer'] }
 };
 function getBuildableStructuresFor(unitType) {
   return Object.entries(BUILDABLE_STRUCTURES).filter(([key,cfg]) => cfg.builtBy.includes(unitType));
@@ -12324,7 +12382,7 @@ const STEALTH_RECONCEAL_COOLDOWN = 5000; // ms after ALL enemies leave detection
 // updateBuildingOccupancy further below) is a different, older mechanic
 // with different rules (immediate, no dwell timer) and isn't what's being
 // asked for here.
-const CONCEALING_UNIT_TYPES = new Set(['blockhouse','foxhole']);
+const CONCEALING_UNIT_TYPES = new Set(['blockhouse','foxhole','trench']);
 // Structures that never rotate to face a target, regardless of whether
 // they have a weapon or ever acquire an attackTarget through some other
 // path - see the exclusion in updateTank's BODY_ONLY_UNITS angle-sync.
@@ -12334,7 +12392,7 @@ const CONCEALING_UNIT_TYPES = new Set(['blockhouse','foxhole']);
 // inside, so it's excluded from the passability exemption applied in
 // resolveUnitCollisions (see INFANTRY_CLASS_TYPES.has(...) check there,
 // which only ever consults CONCEALING_UNIT_TYPES).
-const NO_ROTATION_UNIT_TYPES = new Set(['foxhole','barricade','watchtower','embankment']);
+const NO_ROTATION_UNIT_TYPES = new Set(['foxhole','barricade','watchtower','embankment','trench']);
 function isTouchingTreeOrBuilding(t) {
   for (const tree of trees) {
     if (!tree.alive) continue;
@@ -12988,7 +13046,7 @@ const UNIT_DESCRIPTIONS = {
   mech: { label: 'Mech', text: 'A large, heavily armored walker with a powerful splash-damage weapon that can fire while moving. Slow, but hard to kill and dangerous to any cluster of enemies.' },
   assaulttank: { label: 'Assault Tank', text: 'A fast, lightly-armored vehicle that gains extra armor while moving, making it well suited to closing distance quickly against stationary targets like Artillery or a deployed Turret.' },
   apc: { label: 'APC', text: 'A lightly-armed transport. Order it to Defend to permanently plant it and release a free Infantry passenger.' },
-  engineer: { label: 'Engineer', text: 'A combat engineer vehicle, built on the APC chassis - same armament, but slow (speed 15) and built to clear a path rather than transport troops: it never deploys a passenger and never locks permanently in place on Defend. Anything solid in its way - trees, buildings, walls - is destroyed on contact as it drives through, revealing the damaged map beneath. Mountains and water still stop it completely; it cannot clear or cross either.' },
+  engineer: { label: 'Engineer', text: 'A combat engineer vehicle, built on the APC chassis - same armament, but slow (speed 20) and built to clear a path rather than transport troops: it never deploys a passenger and never locks permanently in place on Defend. Anything solid in its way - trees, buildings, walls - is destroyed on contact as it drives through, revealing the damaged map beneath. Mountains and water still stop it completely; it cannot clear or cross either. Can also field-build a Foxhole, Embankment, or Trench.' },
   lrmmech: { label: 'LRM Mech', text: 'A large walker armed with a long-range rocket salvo instead of a single weapon, firing several rockets at once that can scatter across a cluster of targets. Very expensive, but hits harder than anything else at range.' },
   siegemortar: { label: 'Siege Mortar', text: 'A Blockhouse with an attached mortar - the same long-range splash weapon as Mortar, carried on a far tougher chassis. Cannot fire until deployed, and cannot move once deployed.' },
   atinfantry: { label: 'AT Infantry', text: 'Anti-tank infantry armed with a slow-firing but hard-hitting weapon and a longer reach than regular Infantry. Shares Infantry\'s concealment near trees, buildings, and foxholes, but cannot build.' },
@@ -13001,12 +13059,13 @@ const UNIT_DESCRIPTIONS = {
   // structures (Build menu, not the buy row) - see BUILDABLE_STRUCTURES.
   watchtower: { label: 'Watch Tower', text: 'A pure observation post with the same armor and hit points as a Blockhouse, but no weapon of its own - it exists to see, not to fight. Its sight range is far longer than any other structure, 120% of a Scout\'s. Built by a Sapper in the field for the same cost as a Blockhouse, rather than purchased at the home base.' },
   heavyartillery: { label: 'Heavy Artillery', text: 'A long-range siege weapon built on a Siege Mortar\'s tough chassis, with double the range, 50% more damage per shot, and a third the rate of fire - and half the speed to move it into position. Never fires on its own no matter what wanders into range; it must be given an Attack or Attack Ground order every time. Built by a Sapper in the field for 800 supply, rather than purchased at the home base.' },
-  embankment: { label: 'Embankment', text: 'A built earthwork with no weapon of its own, identical to a Barricade in every stat, but with the opposite kind of blocking: units can walk straight through it, but weapon fire cannot pass through it at all. Built by a Sapper in the field, the same way as a Barricade.' }
+  embankment: { label: 'Embankment', text: 'A built earthwork with no weapon of its own, identical to a Barricade in every stat, but with the opposite kind of blocking: units can walk straight through it, but weapon fire cannot pass through it at all. Built by a Sapper in the field, the same way as a Barricade.' },
+  trench: { label: 'Trench', text: 'A dug-in fighting position with no weapon of its own, field-built by an Engineering Vehicle. Infantry near a Trench can fall still and go undetected after a few seconds, the same concealment a Foxhole, a crater, or damaged ground already grants.' }
 };
 // Display order for the instructions page - roughly cheapest/most basic
 // units first, working up to the most expensive/specialized, rather than
 // whatever arbitrary order UNIT_STATS' own keys happen to be declared in.
-const UNIT_DISPLAY_ORDER = ['tank','scout','autotank','assaulttank','infantry','atinfantry','sappers','medic','apc','engineer','turret','artillery','mortar','blockhouse','watchtower','siegemortar','heavyartillery','foxhole','barricade','embankment','mech','lrmmech','technicalmg','technicalat','technicalmortar','hkunit'];
+const UNIT_DISPLAY_ORDER = ['tank','scout','autotank','assaulttank','infantry','atinfantry','sappers','medic','apc','engineer','turret','artillery','mortar','blockhouse','watchtower','siegemortar','heavyartillery','foxhole','barricade','embankment','trench','mech','lrmmech','technicalmg','technicalat','technicalmortar','hkunit'];
 
 function buildUnitCards() {
   const container = document.getElementById('unitCardsContainer');
