@@ -426,6 +426,27 @@
   }
   .optionBtn:active { transform: scale(0.96); }
   .optionBtn:disabled { opacity: 0.4; pointer-events: none; }
+  /* Every New Game option is a native <select> rather than a row of
+     buttons - appearance:none strips each platform's own default select
+     chrome (most visible on iOS Safari) so the closed/collapsed state can
+     be themed to match optionBtn above; the dropdown list itself, once
+     opened, is rendered by the OS and is only ever lightly stylable at
+     best across browsers - that's an accepted, normal limitation of a
+     native select, not something fixable from page CSS. */
+  .optionSelect {
+    pointer-events: auto;
+    -webkit-appearance: none; appearance: none;
+    width: 100%; max-width: 340px; box-sizing: border-box;
+    padding: 11px 36px 11px 16px; text-align: left;
+    font-size: 13px; letter-spacing: 0.05em; font-weight: 600;
+    font-family: inherit;
+    border-radius: 8px; border: 1px solid rgba(244,239,227,0.35);
+    background-color: rgba(20,28,24,0.45); color: #f4efe3;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%23f4efe3' d='M3.5 5.5l4.5 5 4.5-5z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 12px center; background-size: 12px 12px;
+  }
+  .optionSelect:focus { outline: 2px solid #4fb0ff; }
+  .optionSelect option { background: #141c18; color: #f4efe3; }
 
   #btnTestDone {
     position: fixed; top: 54px; right: 12px; z-index: 55;
@@ -591,67 +612,62 @@
   <div id="launchTitle">NEW GAME</div>
   <div class="optionGroup">
     <div class="optionLabel">Map Size</div>
-    <div class="optionRow">
-      <button class="optionBtn" id="optSizeSmall" data-group="size" data-value="small">SMALL</button>
-      <button class="optionBtn" id="optSizeMedium" data-group="size" data-value="medium">MEDIUM</button>
-      <button class="optionBtn" id="optSizeLarge" data-group="size" data-value="large">LARGE</button>
-    </div>
+    <select class="optionSelect" id="selSize" data-group="size">
+      <option value="small">SMALL</option>
+      <option value="medium">MEDIUM</option>
+      <option value="large">LARGE</option>
+    </select>
   </div>
   <div class="optionGroup">
     <div class="optionLabel">Custom Map</div>
-    <div class="optionRow">
-      <button class="optionBtn" id="optCustomMapOff" data-group="customMap" data-value="off">OFF (PROCEDURAL)</button>
-      <button class="optionBtn" id="optCustomMapCompound01" data-group="customMap" data-value="compound01">WALLED COMPOUND</button>
-      <button class="optionBtn" id="optCustomMapParadiseCity" data-group="customMap" data-value="paradise_city">PARADISE CITY</button>
-      <button class="optionBtn" id="optCustomMapMesaCanyon" data-group="customMap" data-value="mesa_canyon">MESA CANYON</button>
-      <button class="optionBtn" id="optCustomMapFactoryYards" data-group="customMap" data-value="factory_yards">FACTORY YARDS</button>
-    </div>
+    <select class="optionSelect" id="selCustomMap" data-group="customMap">
+      <option value="off">OFF (PROCEDURAL)</option>
+      <option value="compound01">WALLED COMPOUND</option>
+      <option value="paradise_city">PARADISE CITY</option>
+      <option value="mesa_canyon">MESA CANYON</option>
+      <option value="factory_yards">FACTORY YARDS</option>
+      <option value="jungle_boogie">JUNGLE BOOGIE</option>
+    </select>
   </div>
   <div class="optionGroup">
     <div class="optionLabel">Biome</div>
-    <div class="optionRow">
-      <button class="optionBtn" id="optBiomeDesert" data-group="biome" data-value="desert">DESERT</button>
-      <button class="optionBtn" id="optBiomeGrassland" data-group="biome" data-value="grassland">GRASSY PLAINS</button>
-    </div>
-    <div class="optionRow">
-      <button class="optionBtn" id="optBiomeUrban" data-group="biome" data-value="urban">INDUSTRIAL HELL</button>
-      <button class="optionBtn" id="optBiomeIce" data-group="biome" data-value="ice">ICE</button>
-    </div>
-    <div class="optionRow">
-      <button class="optionBtn" id="optBiomeFortressCity" data-group="biome" data-value="fortressCity">FORTRESS CITY</button>
-      <button class="optionBtn" id="optBiomeJungle" data-group="biome" data-value="jungle">JUNGLE</button>
-    </div>
-    <div class="optionRow">
-      <button class="optionBtn" id="optBiomeWasteland" data-group="biome" data-value="wasteland">WASTELAND</button>
-    </div>
+    <select class="optionSelect" id="selBiome" data-group="biome">
+      <option value="desert">DESERT</option>
+      <option value="grassland">GRASSY PLAINS</option>
+      <option value="urban">INDUSTRIAL HELL</option>
+      <option value="ice">ICE</option>
+      <option value="fortressCity">FORTRESS CITY</option>
+      <option value="jungle">JUNGLE</option>
+      <option value="wasteland">WASTELAND</option>
+    </select>
   </div>
   <div class="optionGroup">
     <div class="optionLabel">Mechs Can Capture Supply Points</div>
-    <div class="optionRow">
-      <button class="optionBtn" id="optMechCaptureOff" data-group="mechCapture" data-value="off">OFF</button>
-      <button class="optionBtn" id="optMechCaptureOn" data-group="mechCapture" data-value="on">ON</button>
-    </div>
+    <select class="optionSelect" id="selMechCapture" data-group="mechCapture">
+      <option value="off">OFF</option>
+      <option value="on">ON</option>
+    </select>
   </div>
   <div class="optionGroup">
     <div class="optionLabel">All Neutral Supply Points Start Red</div>
-    <div class="optionRow">
-      <button class="optionBtn" id="optNeutralStartRedOff" data-group="neutralStartRed" data-value="off">OFF</button>
-      <button class="optionBtn" id="optNeutralStartRedOn" data-group="neutralStartRed" data-value="on">ON</button>
-    </div>
+    <select class="optionSelect" id="selNeutralStartRed" data-group="neutralStartRed">
+      <option value="off">OFF</option>
+      <option value="on">ON</option>
+    </select>
   </div>
   <div class="optionGroup">
     <div class="optionLabel">Starting Supply (Testing)</div>
-    <div class="optionRow">
-      <button class="optionBtn" id="optStartingSupplyOff" data-group="startingSupply" data-value="off">NORMAL</button>
-      <button class="optionBtn" id="optStartingSupplyOn" data-group="startingSupply" data-value="on">1000 (BLUE)</button>
-    </div>
+    <select class="optionSelect" id="selStartingSupply" data-group="startingSupply">
+      <option value="off">NORMAL</option>
+      <option value="on">1000 (BLUE)</option>
+    </select>
   </div>
   <div class="optionGroup">
     <div class="optionLabel">Swap Starting Locations</div>
-    <div class="optionRow">
-      <button class="optionBtn" id="optSwapStartOff" data-group="swapStart" data-value="off">OFF</button>
-      <button class="optionBtn" id="optSwapStartOn" data-group="swapStart" data-value="on">ON</button>
-    </div>
+    <select class="optionSelect" id="selSwapStart" data-group="swapStart">
+      <option value="off">OFF</option>
+      <option value="on">ON</option>
+    </select>
   </div>
   <button class="launchBtn" id="btnUnitOptions" style="margin-top:22px; background:rgba(20,28,24,0.55); color:#f4efe3; border:1px solid rgba(244,239,227,0.4);">UNIT OPTIONS</button>
   <button class="launchBtn" id="btnOptionsConfirm">START GAME</button>
@@ -897,7 +913,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 196;
+const GAME_VERSION = 197;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -1108,6 +1124,35 @@ const CUSTOM_MAPS = {
     // the source art - the northern one on a marked-out yard/lot, the
     // southern one on open cracked earth near (but clear of) a tank farm.
     baseWorldPositions: { blue: {x: 1715, y: 118}, red: {x: 961, y: 2464} },
+  },
+  jungle_boogie: {
+    label: 'Jungle Boogie',
+    undamagedSrc: 'assets/terrain/custom_maps/jungle_boogie/undamaged.png',
+    damagedSrc: 'assets/terrain/custom_maps/jungle_boogie/damaged.png',
+    maskSrc: 'assets/terrain/custom_maps/jungle_boogie/collision_mask.png',
+    // Source art is 1254px square (matching compound01/paradise_city/
+    // mesa_canyon); the damaged state supplied was only 1024px and was
+    // upscaled to match before saving, same as Mesa Canyon's own damaged
+    // art needed.
+    worldScale: 2.5,
+    // This mask was authored as a lossy JPEG (unlike every other custom
+    // map's own PNG mask), so its colors carry real compression noise
+    // rather than clean flat values - sampled directly from the file
+    // regardless: true black (0,0,0) mountains, muted green (75,155,57)
+    // trees, red (200,50,50) buildings, and a distinctly brighter/bluer
+    // green (~100,212,119) marking the two base positions - different
+    // enough from the tree green (particularly on the blue channel, 119
+    // vs 57) that a 45-tolerance match on trees never catches it, so base
+    // markers are never mistaken for forest. No separate wall color here,
+    // same as every custom map besides compound01/paradise_city.
+    maskColors: { water: [57,131,218], trees: [75,155,57], building: [200,50,50], wall: [-999,-999,-999], mountain: [0,0,0] },
+    maskColorTolerance: 45,
+    // Picked by locating the two bright-green "X" marker clusters drawn
+    // directly on the mask and converting each cluster's own pixel
+    // centroid to world coordinates via worldScale above. Both land on
+    // open ground in the source art - the northern one on a cleared field
+    // beside a road, the southern one on an open clearing near the water.
+    baseWorldPositions: { blue: {x: 2953, y: 249}, red: {x: 283, y: 2848} },
   },
 };
 const customMapImages = {}; // e.g. customMapImages.compound01.undamaged -> HTMLImageElement
@@ -13226,9 +13271,8 @@ let selectedStartingSupply = 'off';
 // (generateNewMap, loadCustomMap) for where this actually takes effect.
 let selectedSwapStart = 'off';
 function setOptionSelection(group, value) {
-  document.querySelectorAll(`.optionBtn[data-group="${group}"]`).forEach(btn=>{
-    btn.classList.toggle('selected', btn.dataset.value === value);
-  });
+  const sel = document.querySelector(`.optionSelect[data-group="${group}"]`);
+  if (sel && sel.value !== value) sel.value = value;
   if (group === 'size') selectedMapSize = value;
   else if (group === 'biome') selectedBiome = value;
   else if (group === 'mechCapture') selectedMechCapture = value;
@@ -13237,8 +13281,8 @@ function setOptionSelection(group, value) {
   else if (group === 'startingSupply') selectedStartingSupply = value;
   else if (group === 'swapStart') selectedSwapStart = value;
 }
-document.querySelectorAll('.optionBtn').forEach(btn=>{
-  btn.addEventListener('click', ()=> setOptionSelection(btn.dataset.group, btn.dataset.value));
+document.querySelectorAll('.optionSelect').forEach(sel=>{
+  sel.addEventListener('change', ()=> setOptionSelection(sel.dataset.group, sel.value));
 });
 // initialize each group's visible default selection to match the state
 // variables above, so the screen doesn't open with nothing highlighted
