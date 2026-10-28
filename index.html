@@ -897,7 +897,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 193;
+const GAME_VERSION = 194;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -947,7 +947,7 @@ const BODY_ONLY_UNITS = ['artillery','infantry','mortar','blockhouse','foxhole',
 // move/aim direction like everything else, but the two static deployables
 // never turn once placed) so the offset is harmless even though it's rarely
 // visually relevant for them.
-const SPRITE_FACING_UP = new Set(['tank','scout','autotank','assaulttank','turret','artillery','infantry','mortar','blockhouse','foxhole','mech','apc','engineer','lrmmech','atinfantry','sappers','siegemortar','barricade','watchtower','heavyartillery','embankment','technicalmg','technicalat','technicalmortar','hkunit']);
+const SPRITE_FACING_UP = new Set(['tank','scout','autotank','assaulttank','turret','artillery','infantry','mortar','blockhouse','foxhole','mech','apc','engineer','lrmmech','atinfantry','sappers','siegemortar','barricade','watchtower','heavyartillery','embankment','trench','technicalmg','technicalat','technicalmortar','hkunit']);
 const SPRITE_ROTATION_OFFSET = Math.PI/2;
 
 // Loaded lazily via the Image() constructor - drawTank checks spritesReady
@@ -6197,13 +6197,22 @@ function lineBlockedForFiring(t, x0, y0, x1, y1) {
 // to the shooter absorbs it - the first thing the round would actually
 // reach - found via the same point-to-segment distance test every other
 // circular-obstacle check in the file already uses.
+//
+// Trench shares this exact mechanic - "Trenches behave like embankments...
+// they do not move and have no collision" - so EMBANKMENT_REDIRECT_TYPES
+// below covers both rather than this being Embankment-specific code
+// duplicated for Trench. The one deliberate difference between the two is
+// splash damage, not direct fire: a Trench does NOT block splash (see
+// SPLASH_BLOCKING_TYPES, which only Embankment/Barricade/Foxhole belong
+// to) - that distinction lives entirely in isSplashBlocked, not here.
+const EMBANKMENT_REDIRECT_TYPES = new Set(['embankment','trench']);
 function resolveEmbankmentRedirect(x0, y0, target, shooterTeam) {
   const x1 = target.x, y1 = target.y;
   const dx = x1-x0, dy = y1-y0;
   const lenSq = dx*dx + dy*dy;
   let closest = null, closestT = Infinity;
   for (const e of entities) {
-    if (e.kind !== 'tank' || !e.alive || e.unitType !== 'embankment') continue;
+    if (e.kind !== 'tank' || !e.alive || !EMBANKMENT_REDIRECT_TYPES.has(e.unitType)) continue;
     if (e.team === shooterTeam) continue;
     let t = lenSq > 0 ? ((e.x-x0)*dx + (e.y-y0)*dy) / lenSq : 0;
     t = Math.max(0, Math.min(1, t));
@@ -9187,11 +9196,20 @@ function fireProjectile(from, to, team, dmg, unitType) {
   // completely visible again if... they open fire". `from` is the actual
   // firing unit object at both call sites (not just a bare position), so
   // this is the single choke point every shot passes through regardless of
-  // which branch of updateTank fired it.
+  // which branch of updateTank fired it. stealthReconcealTimer is reset the
+  // same way updateStealthConcealment's own enemy-proximity reveal already
+  // resets it - "5 seconds after they stop firing they will return to
+  // their stealth state if they match the stealth conditions": firing is
+  // simply one more event (alongside an enemy coming into detection range)
+  // that restarts the same reconceal-cooldown-then-dwell-timer sequence,
+  // rather than a separate, faster mechanism of its own. A unit still
+  // actively trading fire keeps resetting this every shot, so the 5-second
+  // countdown only ever genuinely starts once it actually stops.
   if (from.stealthConcealed) {
     from.stealthConcealed = false;
     from.stealthDwellTime = 0;
   }
+  from.stealthReconcealTimer = 0;
   if (unitType === 'lrmmech') { queueLRMSalvo(from, to.x, to.y); return; }
   const raw = UNIT_STATS[unitType];
   const dist = Math.hypot(to.x-from.x, to.y-from.y);
@@ -10302,13 +10320,22 @@ function updateAutoEngage(t) {
   if (t.attackTarget && t.attackTarget.alive) return; // already have a target
   if (t.holdEngage) return; // player just ordered a move/retreat: don't auto-lock back onto a target
   if (t.holdFire) return; // player explicitly ordered Hold Fire: never auto-acquire until Defend/Attack is pressed
-  // Stealth-concealed units stay completely passive and do not auto-acquire
-  // anything on their own - per "will not move or react until ordered, or
-  // they are detected". They can still end up fighting (see the concealed
-  // branch below, for the case where the player directly orders an attack
-  // while the unit happens to still be concealed), but they never initiate
-  // it themselves while hidden.
-  if (t.stealthConcealed) return;
+  // Stealth-concealed units generally stay completely passive and do not
+  // auto-acquire anything on their own - per "will not move or react until
+  // ordered, or they are detected". Infantry-class is the one exception:
+  // "infantry who become invisible will open fire on enemies when they
+  // come into range" - so a concealed Infantry/AT Infantry/Sappers/Medic
+  // unit still falls through to the normal target-acquisition logic below
+  // exactly like an unconcealed one would, while every other stealth-
+  // capable unit type (Technicals - see TECHNICAL_UNIT_TYPES) keeps the
+  // original fully-passive behavior unchanged. Firing itself is what
+  // actually breaks concealment (see fireProjectile's own comment) - this
+  // check only gates whether a concealed unit is even allowed to pick a
+  // target and attempt to fire in the first place; Defend mode already
+  // keeps any unit, concealed Infantry included, from chasing rather than
+  // holding ground once it does (see holdsGround below), with nothing
+  // extra needed here for that.
+  if (t.stealthConcealed && !INFANTRY_CLASS_TYPES.has(t.unitType)) return;
   // A Sapper actively assigned to repair someone stays focused on that job
   // and doesn't go picking fights of its own - matches how thoroughly
   // isBuilding freezes a unit constructing a structure. The unit it's
@@ -10415,8 +10442,14 @@ function resolveUnitCollisions() {
       // passable to EVERY unit type (not just Infantry-class, unlike
       // Blockhouse/Foxhole above), so it's excluded from this collision
       // pass entirely rather than added to CONCEALING_UNIT_TYPES' narrower
-      // exemption. It still blocks weapon fire - see lineBlockedBySight.
-      if (a.unitType === 'embankment' || b.unitType === 'embankment') continue;
+      // exemption. Direct fire is still absorbed - see
+      // resolveEmbankmentRedirect, not a sight-blocking check (lineBlockedBySight
+      // deliberately never looks at Embankment/Trench at all, per its own
+      // comment). Trench shares this exact passability - "Trenches behave
+      // like embankments... they do not move and have no collision" - see
+      // EMBANKMENT_REDIRECT_TYPES' own comment for the one place the two
+      // deliberately differ (splash damage).
+      if (EMBANKMENT_REDIRECT_TYPES.has(a.unitType) || EMBANKMENT_REDIRECT_TYPES.has(b.unitType)) continue;
       // Flying units "can also pass over (or through) other units except for
       // other flying units" - skipped here whenever exactly one of the pair
       // is flying (a flying unit passes through any ground unit freely),
@@ -10686,8 +10719,14 @@ function updateTank(t, dt, now) {
   if (t.isBuilding) {
     const buildingType = t.buildingType || 'foxhole';
     const structureCfg = BUILDABLE_STRUCTURES[buildingType] || BUILDABLE_STRUCTURES.foxhole;
+    // "Engineering vehicles take half the time to build structures compared
+    // to sappers" - applied as a multiplier at the point of comparison
+    // rather than a separate per-builder buildTime table, so Infantry and
+    // Sappers keep using the structure's own buildTime completely
+    // unchanged; only an Engineer's own build gets the discount.
+    const effectiveBuildTime = t.unitType === 'engineer' ? structureCfg.buildTime * 0.5 : structureCfg.buildTime;
     t.buildProgress += dt;
-    if (t.buildProgress >= structureCfg.buildTime) {
+    if (t.buildProgress >= effectiveBuildTime) {
       // "Make sure the restricted units cannot be spawned" applies here too,
       // not just to purchaseUnit - the Build menu button for a disabled
       // structure is already hidden (see buildBuildMenu), so this is a
