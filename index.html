@@ -913,7 +913,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 198;
+const GAME_VERSION = 199;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -7545,6 +7545,52 @@ function processCustomMapMask(mapId) {
       }
     }
   }
+
+  // Close any remaining diagonal-only gaps: two cells diagonally adjacent
+  // to each other, both solid, with neither of their two shared
+  // orthogonal neighbors also solid - a one-point-wide hole at the exact
+  // corner where the two solid cells touch. findPath's own corner-cutting
+  // prevention already refuses to path THROUGH a gap like this (see its
+  // own comment there), but that protection only covers movement that
+  // actually goes through the pathfinder - direct/non-pathfound movement
+  // has no equivalent guard against slipping through what is, at the
+  // single-cell level, still technically open ground. Closing it in the
+  // grid itself removes the gap unconditionally for every consumer of
+  // these arrays, rather than relying on every caller to independently
+  // avoid exploiting it. Checked directly against every current custom
+  // map's own water: Jungle Boogie and Paradise City already had none;
+  // compound01 and Factory Yards each had a handful (2 and 7 cells added
+  // respectively, out of totals in the hundreds) - a negligible, surgical
+  // correction, not bulk over-blocking.
+  function closeDiagonalGaps(solidGrid) {
+    let changedAny = true, passes = 0;
+    while (changedAny && passes < 10) {
+      changedAny = false;
+      passes++;
+      for (let row = 0; row < terrainRows-1; row++) {
+        for (let col = 0; col < terrainCols-1; col++) {
+          const idx = row*terrainCols+col;
+          const idxRight = row*terrainCols+(col+1);
+          const idxDown = (row+1)*terrainCols+col;
+          const idxDiagDR = (row+1)*terrainCols+(col+1);
+          if (solidGrid[idx] && solidGrid[idxDiagDR] && !solidGrid[idxRight] && !solidGrid[idxDown]) {
+            solidGrid[idxRight] = 1;
+            changedAny = true;
+          }
+          if (col > 0) {
+            const idxLeft = row*terrainCols+(col-1);
+            const idxDiagDL = (row+1)*terrainCols+(col-1);
+            if (solidGrid[idx] && solidGrid[idxDiagDL] && !solidGrid[idxLeft] && !solidGrid[idxDown]) {
+              solidGrid[idxLeft] = 1;
+              changedAny = true;
+            }
+          }
+        }
+      }
+    }
+  }
+  closeDiagonalGaps(lakeSolid);
+  closeDiagonalGaps(mountainSolid);
 
   // Trees (the mask's green areas) are deliberately NOT a grid-cell solid
   // flag the way water/buildings/walls above are - they're turned into
