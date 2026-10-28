@@ -913,7 +913,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 197;
+const GAME_VERSION = 198;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -6833,21 +6833,25 @@ function issueMoveOrder(t, x, y, suppressAutoEngage) {
   // (Mesa Canyon's rock formations), which it can't destroy any more than
   // any other vehicle can - isTrueMountainCellAt is the one signal
   // distinguishing the two, same as resolveMountainCollision/
-  // lineBlockedForFiring already use. engineerLineBlocked below only
-  // treats an actual true-mountain cell as a reason to fall back to normal
-  // A* pathfinding; a destructible cell is never a reason to route around
-  // in advance. Water still physically stops it (resolveMountainCollision
-  // again), it just isn't routed around in advance the way a true mountain
-  // now is - it can end up stopped at the water's edge rather than finding
-  // a way around, which for a specialized demolition vehicle is an
-  // acceptable trade-off against extending the nav grid itself to treat
-  // water differently.
+  // lineBlockedForFiring already use. engineerLineBlocked below treats
+  // either an actual true-mountain cell OR water along the direct line as
+  // a reason to fall back to normal A* pathfinding; a destructible cell is
+  // never a reason to route around in advance. Water is included here
+  // (not left for resolveMountainCollision's own per-frame bounce-back to
+  // catch, the way it used to be) because that per-frame check, walking
+  // straight at a problem the pathfinder was never consulted about, has no
+  // access to findPath's own corner-cutting prevention - "water is
+  // impassable" needs the same protection pathfound movement already gets
+  // against a thin, diagonal river slipping past a single-point check,
+  // which going through the pathfinder (now that it's actually asked)
+  // provides for free.
   const engineerLineBlocked = t.unitType === 'engineer' && activeCustomMapId && (() => {
     const dist = Math.hypot(x-t.x, y-t.y);
     const steps = Math.max(1, Math.ceil(dist / (TERRAIN_CELL*0.5)));
     for (let i=1;i<steps;i++) {
       const frac = i/steps;
-      if (isTrueMountainCellAt(t.x+(x-t.x)*frac, t.y+(y-t.y)*frac)) return true;
+      const px = t.x+(x-t.x)*frac, py = t.y+(y-t.y)*frac;
+      if (isTrueMountainCellAt(px,py) || isLakeSolidAt(px,py) || isCrevasseSolidAt(px,py) || isRiverSolidAt(px,py)) return true;
     }
     return false;
   })();
@@ -7474,16 +7478,50 @@ function processCustomMapMask(mapId) {
     return [data[i], data[i+1], data[i+2]];
   }
   customMapCellHp = new Uint8Array(terrainCols * terrainRows);
+  // Each cell is classified from a small 3x3 cluster of sample points
+  // spanning its own footprint, not just its exact center pixel - a thin,
+  // diagonal feature (most critically a winding river) can have its edge
+  // pass through part of a cell without ever touching that one center
+  // point, letting the cell be misread as open ground it isn't. A cell
+  // only actually counts as a category once at least 3 of the 9 samples
+  // agree, rather than any single one - checked directly against Jungle
+  // Boogie's own river: a plain "any match" threshold closed every
+  // topological gap but, by also now catching the thinnest possible graze
+  // along a cell's edge, started misclassifying actual dry land nearby as
+  // water too, measurably hurting pathfinding around the river compared
+  // to the original single-point sampling. Requiring 3-of-9 instead - a
+  // cell genuinely spans into the feature, not just brushed by its edge -
+  // closes the same topological gaps with none of that regression (tested
+  // directly, not just assumed: every crossing point that succeeded with
+  // single-point sampling still succeeds with this threshold). A few
+  // irreducible diagonal-only pinch points can still exist no matter how
+  // this is tuned, an actual property of where the river's true edges
+  // fall relative to the grid rather than a sampling gap - those are left
+  // to the corner-cutting prevention already built into findPath's own
+  // diagonal-move check, which correctly refuses to path through a
+  // diagonal gap between two blocked cells regardless of sampling.
+  const SUB_SAMPLE_OFFSETS = [-0.33, 0, 0.33];
+  const SUB_SAMPLE_VOTE_THRESHOLD = 3;
   for (let row = 0; row < terrainRows; row++) {
     for (let col = 0; col < terrainCols; col++) {
       const worldX = col*TERRAIN_CELL, worldY = row*TERRAIN_CELL;
-      const px = Math.round(worldX / cfg.worldScale), py = Math.round(worldY / cfg.worldScale);
-      const c = maskColorAt(px, py);
-      if (!c) continue;
+      let waterVotes=0, mountainVotes=0, wallVotes=0, buildingVotes=0;
+      for (const dxFrac of SUB_SAMPLE_OFFSETS) {
+        for (const dyFrac of SUB_SAMPLE_OFFSETS) {
+          const sx = worldX + dxFrac*TERRAIN_CELL, sy = worldY + dyFrac*TERRAIN_CELL;
+          const px = Math.round(sx / cfg.worldScale), py = Math.round(sy / cfg.worldScale);
+          const c = maskColorAt(px, py);
+          if (!c) continue;
+          if (colorCloseEnough(c[0],c[1],c[2], maskColors.water, maskTolerance)) waterVotes++;
+          else if (colorCloseEnough(c[0],c[1],c[2], maskColors.mountain, maskTolerance)) mountainVotes++;
+          else if (colorCloseEnough(c[0],c[1],c[2], maskColors.wall, maskTolerance)) wallVotes++;
+          else if (colorCloseEnough(c[0],c[1],c[2], maskColors.building, maskTolerance)) buildingVotes++;
+        }
+      }
       const idx = row*terrainCols + col;
-      if (colorCloseEnough(c[0],c[1],c[2], maskColors.water, maskTolerance)) {
+      if (waterVotes >= SUB_SAMPLE_VOTE_THRESHOLD) {
         lakeSolid[idx] = 1;
-      } else if (colorCloseEnough(c[0],c[1],c[2], maskColors.mountain, maskTolerance)) {
+      } else if (mountainVotes >= SUB_SAMPLE_VOTE_THRESHOLD) {
         // A TRUE, indestructible mountain (Mesa Canyon's own rock
         // formations) - mountainSolid is set exactly like wall/building
         // below so every existing "is this cell blocked" check (movement,
@@ -7498,10 +7536,10 @@ function processCustomMapMask(mapId) {
         // damage and the Engineer's wide-radius clearing call can never
         // touch a true mountain's HP either, with no changes needed there.
         mountainSolid[idx] = 1;
-      } else if (colorCloseEnough(c[0],c[1],c[2], maskColors.wall, maskTolerance)) {
+      } else if (wallVotes >= SUB_SAMPLE_VOTE_THRESHOLD) {
         mountainSolid[idx] = 1;
         customMapCellHp[idx] = CUSTOM_MAP_CELL_HP.wall;
-      } else if (colorCloseEnough(c[0],c[1],c[2], maskColors.building, maskTolerance)) {
+      } else if (buildingVotes >= SUB_SAMPLE_VOTE_THRESHOLD) {
         mountainSolid[idx] = 1;
         customMapCellHp[idx] = CUSTOM_MAP_CELL_HP.building;
       }
