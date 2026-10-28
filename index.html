@@ -897,7 +897,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 194;
+const GAME_VERSION = 196;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -6699,7 +6699,7 @@ function makeTank(team, x, y, unitType) {
     // before or after deploying - DEFEND for it is purely about the
     // permanent lock and releasing its passenger (see the DEFEND button
     // handler), not about gating its weapon.
-    isDeployable: unitType === 'turret' || unitType === 'blockhouse' || unitType === 'apc' || unitType === 'foxhole' || unitType === 'siegemortar' || unitType === 'barricade' || unitType === 'watchtower' || unitType === 'heavyartillery' || unitType === 'embankment',
+    isDeployable: unitType === 'turret' || unitType === 'blockhouse' || unitType === 'apc' || unitType === 'foxhole' || unitType === 'siegemortar' || unitType === 'barricade' || unitType === 'watchtower' || unitType === 'heavyartillery' || unitType === 'embankment' || unitType === 'trench',
     requiresDeployToFire: unitType === 'turret' || unitType === 'blockhouse' || unitType === 'siegemortar' || unitType === 'heavyartillery',
     permanentlyDeployed: false,
     // APC only: true once it has already released its passenger Infantry on
@@ -10769,15 +10769,21 @@ function updateTank(t, dt, now) {
   // cancelAnyDemolishInvolving.
   if (t.beingDemolished) return;
 
-  // Stealth-concealed Infantry/Scout: completely frozen in place - no
-  // movement, no combat, no auto-engage - until the player gives an
-  // explicit order (which clears stealthConcealed in issueMoveOrder/
-  // issueAttackOrder) or updateStealthConcealment above detects an enemy
-  // within range and breaks concealment on its own. This is checked before
-  // updateAutoEngage even runs, matching "will not move or react until
-  // ordered, or they are detected" - a concealed unit doesn't get to
-  // acquire a target and start turning to face it on its own initiative.
-  if (t.stealthConcealed) return;
+  // Stealth-concealed units are frozen in place - no movement, no auto-
+  // engage initiative of their own - until the player gives an explicit
+  // order (which clears stealthConcealed in issueMoveOrder/issueAttackOrder)
+  // or updateStealthConcealment above detects an enemy within range and
+  // breaks concealment on its own. Infantry-class is the one exception -
+  // "infantry who become invisible will open fire on enemies when they come
+  // into range" - so a concealed Infantry/AT Infantry/Sappers/Medic unit
+  // still falls through to updateAutoEngage below exactly like an
+  // unconcealed one would (see that function's own matching exception,
+  // which this one must stay in sync with - this OUTER gate runs first and
+  // would otherwise freeze the unit before updateAutoEngage is ever even
+  // reached, making that inner exception alone insufficient on its own).
+  // Every other stealth-capable type (Technicals) keeps the original
+  // fully-frozen behavior unchanged.
+  if (t.stealthConcealed && !INFANTRY_CLASS_TYPES.has(t.unitType)) return;
 
   const startX = t.x, startY = t.y;
   t.holdsGroundFixed = false; // recomputed fresh below if this frame's combat state qualifies
