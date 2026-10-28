@@ -897,7 +897,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 192;
+const GAME_VERSION = 193;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -6849,23 +6849,41 @@ const UNIT_COSTS = { tank: UNIT_STATS.tank.cost, artillery: UNIT_STATS.artillery
 const TANK_COST = UNIT_COSTS.tank; // kept for any existing references
 let supply = { blue: 0, red: 0 };
 
+// "No further than 300 pixels" means screen pixels, not world units -
+// worldToScreen scales by camera.zoom (0.35-1.6, default 0.62 - see the
+// camera object), so a fixed world-unit distance looks like a different
+// number of actual screen pixels depending on how zoomed in the player
+// currently is. There's no single world-unit value that's "300 screen
+// pixels" at every zoom level - but converting the 300px cap using
+// camera.maxZoom (1.6, the MOST zoomed-in the camera ever gets) is the one
+// reference that makes "no further than 300 pixels" hold as a genuine
+// upper bound regardless of zoom: 300/1.6 = 187.5 world units, rounded
+// down to 185 for a small safety margin. At any zoom level below maxZoom,
+// that same 185-unit distance renders as fewer, not more, screen pixels,
+// so the 300px cap is never exceeded - only ever approached at max zoom
+// and held comfortably under it everywhere else.
+const SUPPLY_DEPOT_MAX_DIST = 185;
+// Lower bound keeps a depot meaningfully outside the base's own repair
+// zone (radius 46 + 30 = 76 - see makeBase) rather than spawning inside or
+// right at its edge, with still-generous room below the max above for the
+// randomized spread every other placement in this function already uses.
+const SUPPLY_DEPOT_MIN_DIST = 100;
 function placeSupplyBuildings(team, base) {
   // place two supply buildings at randomized angles near the base (each game
   // gets a fresh layout), nudged off mountains if needed. A minimum angular
   // separation keeps the two from landing right on top of each other, and
-  // distance is randomized within a sensible band - 200-300 units from the
-  // base, per spec - so they're always close enough to matter but never
-  // fixed to the exact same spot every match. The mountain-avoidance nudge
-  // below only ever rotates the angle, never changes the distance itself,
-  // so both depots stay within that same 200-300 band even when the first
-  // attempt at a given angle lands on a mountain/building and has to walk
-  // around it.
+  // distance is randomized within SUPPLY_DEPOT_MIN_DIST..MAX_DIST above so
+  // they're always close enough to matter but never fixed to the exact same
+  // spot every match. The mountain-avoidance nudge below only ever rotates
+  // the angle, never changes the distance itself, so both depots stay
+  // within that same band even when the first attempt at a given angle
+  // lands on a mountain/building and has to walk around it.
   const firstAngle = Math.random()*Math.PI*2;
   const angles = [ firstAngle, firstAngle + Math.PI*0.6 + Math.random()*Math.PI*0.8 ];
   angles.forEach(baseAngle=>{
     let angle = baseAngle;
     let x, y, tries = 0;
-    const dist = 200 + Math.random()*100; // 200-300 units from the base
+    const dist = SUPPLY_DEPOT_MIN_DIST + Math.random()*(SUPPLY_DEPOT_MAX_DIST-SUPPLY_DEPOT_MIN_DIST);
     do {
       x = base.x + Math.cos(angle)*dist;
       y = base.y + Math.sin(angle)*dist;
